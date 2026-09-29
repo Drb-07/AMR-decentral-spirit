@@ -285,47 +285,38 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       }
 
       for (const d of dirs) {
-          const nx = curr.x + d.dx;
-          const ny = curr.y + d.dy;
-          const nKey = `${nx},${ny}`;
-
-          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-          if (mapData.grid[nx][ny] === 1) continue;
-          if (avoidSet.has(nKey) && nKey !== `${gx},${gy}`) continue;
-
-          // =========================================================================
-          // CHARGER FREEZE FIX: Forward-First Exit and Entry Rules
-          // =========================================================================
-          // If LEAVING a top charger (y=1), must go South (y=2) straight ahead
-          if (curr.y === 1 && (ny !== 2 || nx !== curr.x)) continue;
-          // If LEAVING a bottom charger (y=48), must go North (y=47) straight ahead
-          if (curr.y === 48 && (ny !== 47 || nx !== curr.x)) continue;
-          
-          // If ENTERING a top charger (y=1), must come from South (y=2) straight ahead
-          if (ny === 1 && (curr.y !== 2 || curr.x !== nx)) continue;
-          // If ENTERING a bottom charger (y=48), must come from North (y=47) straight ahead
-          if (ny === 48 && (curr.y !== 47 || curr.x !== nx)) continue;
-
-          // Prevent using charger cells as pass-throughs
-          if ((ny === 1 || ny === 48) && (nx !== gx || ny !== gy) && (nx !== sx || ny !== sy)) continue;
-
-          // STRICT HORIZONTAL HIGHWAY ENFORCEMENT
+          // STRICT HORIZONTAL HIGHWAY ENFORCEMENT (1-way per lane)
           if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue;
           if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue;
+
+          // STRICT VERTICAL HIGHWAY ENFORCEMENT (Dock lanes)
+          if (nx === 2 && d.dy > 0) continue; // Left lane goes strictly UP
+          if (nx === 3 && d.dy < 0) continue; // Right lane goes strictly DOWN
+          if (nx === 166 && d.dy > 0) continue; // Left lane goes strictly UP
+          if (nx === 167 && d.dy < 0) continue; // Right lane goes strictly DOWN
 
           // TURN PENALTY
           const isTurn = curr.dir !== null && (curr.dir.dx !== d.dx || curr.dir.dy !== d.dy);
           let moveCost = isTurn ? 2.5 : 1.0; 
 
           // =========================================================================
-          // THE "DRIVEWAY" RULE (2-Way Dead-Ends, No Shortcuts)
+          // THE "DRIVEWAY" RULE (Strictly Bi-Directional, No Through-Traffic)
           // =========================================================================
-          if (NARROW_AISLE_COLS_SET.has(nx) && d.dy !== 0) {
-              // If this aisle is neither your starting column nor your destination column,
-              // DO NOT drive through it. Stay on the main horizontal highways.
-              if (nx !== gx && nx !== sx) {
-                  moveCost += 500.0; // Massive penalty forces them to avoid other ppls driveways
-              }
+          const isHorizBuffer = (ny === 5 || ny === 22 || ny === 27 || ny === 44);
+          const isVertAisle = NARROW_AISLE_COLS_SET.has(nx);
+
+          // 1. No Through-Traffic: Stay off someone else's driveway
+          if (isVertAisle && nx !== gx && nx !== sx) moveCost += 1000.0;
+          if (isHorizBuffer && ny !== gy && ny !== sy) moveCost += 1000.0;
+
+          // 2. Strict Bi-Directional Movement (No 4-way turns inside a driveway)
+          // If inside a vertical driveway, forbid horizontal steps (unless entering/exiting)
+          if (isVertAisle && d.dx !== 0 && ny !== sy && ny !== gy) moveCost += 1000.0;
+          
+          // If inside a horizontal driveway, forbid vertical steps (unless entering/exiting)
+          if (isHorizBuffer && d.dy !== 0 && nx !== sx && nx !== gx) moveCost += 1000.0;
+
+          const tentG = gScore.get(currKey) + moveCost;
           }
           
           const tentG = gScore.get(currKey) + moveCost;
