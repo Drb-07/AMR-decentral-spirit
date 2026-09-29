@@ -285,7 +285,7 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       }
 
       for (const d of dirs) {
-          // 1. Define the next cell coordinates
+          // 1. Define the next cell coordinates (Restored!)
           const nx = curr.x + d.dx;
           const ny = curr.y + d.dy;
           const nKey = `${nx},${ny}`;
