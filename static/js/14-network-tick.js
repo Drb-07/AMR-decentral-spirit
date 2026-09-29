@@ -66,10 +66,13 @@ function tickDecentralizedNetwork(dt) {
       if (typeof zenohMesh !== 'undefined') zenohMesh.publishHeartbeat(robot.id, robot.x, robot.y, payload);
     }
     
+    // 3. Purge stale peer data & Self-Healing Task Continuity
     if (robot.localPeerTable) {
       for (const [peerId, peerData] of robot.localPeerTable.entries()) {
         if (totalSimSeconds - peerData.timestamp > 5.0) { 
           
+          // FALSE ALARM GUARD: Check if the peer is actually dead in the global fleet, 
+          // or if we just temporarily lost their mesh heartbeat packets.
           const actualBot = typeof AMR_FLEET !== 'undefined' ? AMR_FLEET.find(b => b.id === peerId) : null;
           const isActuallyDead = !actualBot || actualBot.isFaulted || actualBot.state === 'OUT_OF_CHARGE' || 
                                  (totalSimSeconds - (actualBot.lastHeartbeatSimTime || 0) > 5.0);
@@ -211,7 +214,7 @@ function getAccessPointForRack(rx, ry, fromX, fromY, requestingRobotId = null) {
 }
 
 // =========================================================================
-// SPACE-TIME A* PATHFINDER: Strict Crosswalks & Paradox-Free Lanes
+// SPACE-TIME A* PATHFINDER: Strict Lanes, Charger Fixes & Turn Penalties
 // =========================================================================
 function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
   if (sx === gx && sy === gy) return [];
@@ -230,6 +233,7 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       for (const key of avoidCells) avoidSet.add(key);
   }
 
+  // Inject WHCA* Intent Tubes from Local Peers
   const reqRobot = typeof AMR_FLEET !== 'undefined' ? AMR_FLEET.find(b => b.id === requestingRobotId) : null;
   const peerData = reqRobot && reqRobot.localPeerTable ? Array.from(reqRobot.localPeerTable.values()) : [];
   
@@ -241,11 +245,17 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
           }
       }
       if (peer.intent_tube && peer.intent_tube.length > 0) {
+          // Avoid the immediate forward steps of peers
           for (let i = 0; i < Math.min(4, peer.intent_tube.length); i++) {
               avoidSet.add(`${Math.round(peer.intent_tube[i][0])},${Math.round(peer.intent_tube[i][1])}`);
           }
       }
   }
+
+  // Highway & Buffer Row definitions
+  const WESTBOUND_ROWS = new Set([2, 22, 24, 44, 46]);
+  const EASTBOUND_ROWS = new Set([3, 4, 5, 23, 25, 26, 27, 45, 47]);
+  const NARROW_AISLE_COLS_SET = typeof NARROW_AISLE_COLS !== 'undefined' ? NARROW_AISLE_COLS : new Set();
 
   const openSet = [];
   const gScore = new Map();
@@ -256,7 +266,6 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
   gScore.set(startKey, 0);
 
   const dirs = [ {dx: 0, dy: -1}, {dx: 0, dy: 1}, {dx: -1, dy: 0}, {dx: 1, dy: 0} ];
-  const NARROW_AISLE_COLS_SET = typeof NARROW_AISLE_COLS !== 'undefined' ? NARROW_AISLE_COLS : new Set();
 
   while (openSet.length > 0) {
       openSet.sort((a, b) => a.f - b.f);
@@ -285,46 +294,40 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
           if (avoidSet.has(nKey) && nKey !== `${gx},${gy}`) continue;
 
           // =========================================================================
-          // 1. DOCK BUFFERS (Crosswalk Rule): No vertical driving allowed
+          // CHARGER FREEZE FIX: Forward-First Exit and Entry Rules
           // =========================================================================
-          if ((nx === 1 || nx === 2 || nx === 167 || nx === 168) && d.dy !== 0) continue;
+          // If LEAVING a top charger (y=1), must go South (y=2) straight ahead
+          if (curr.y === 1 && (ny !== 2 || nx !== curr.x)) continue;
+          // If LEAVING a bottom charger (y=48), must go North (y=47) straight ahead
+          if (curr.y === 48 && (ny !== 47 || nx !== curr.x)) continue;
+          
+          // If ENTERING a top charger (y=1), must come from South (y=2) straight ahead
+          if (ny === 1 && (curr.y !== 2 || curr.x !== nx)) continue;
+          // If ENTERING a bottom charger (y=48), must come from North (y=47) straight ahead
+          if (ny === 48 && (curr.y !== 47 || curr.x !== nx)) continue;
 
-          // =========================================================================
-          // 2. RACK BUFFERS & CHARGERS (Crosswalk Rule): No horizontal driving allowed
-          // =========================================================================
-          if ((ny === 1 || ny === 5 || ny === 22 || ny === 27 || ny === 44 || ny === 48) && d.dx !== 0) continue;
+          // Prevent using charger cells as pass-throughs
+          if ((ny === 1 || ny === 48) && (nx !== gx || ny !== gy) && (nx !== sx || ny !== sy)) continue;
 
-          // =========================================================================
-          // 3. HORIZONTAL HIGHWAYS (Strict 1-Way, no buffer overlaps)
-          // =========================================================================
-          const EASTBOUND_ROWS = new Set([2, 4, 24, 26, 46]);
-          const WESTBOUND_ROWS = new Set([3, 23, 25, 45, 47]);
-          if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue;
+          // STRICT HORIZONTAL HIGHWAY ENFORCEMENT
           if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue;
+          if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue;
 
-          // =========================================================================
-          // 4. VERTICAL HIGHWAYS (Strict 1-Way)
-          // =========================================================================
-          if (nx === 3 && d.dy > 0) continue;   // Left lane goes UP (North)
-          if (nx === 4 && d.dy < 0) continue;   // Right lane goes DOWN (South)
-          if (nx === 165 && d.dy > 0) continue; // Left lane goes UP (North)
-          if (nx === 166 && d.dy < 0) continue; // Right lane goes DOWN (South)
-
-          // =========================================================================
-          // 5. NARROW AISLES (Strict 1-Way & No Lane Switching)
-          // =========================================================================
-          const isVertAisle = NARROW_AISLE_COLS_SET.has(nx);
-          if (isVertAisle) {
-              if (d.dx !== 0) continue; // Absolute ban on horizontal movement inside aisles
-              const isSouthboundAisle = (nx % 2 === 0);
-              if (isSouthboundAisle && d.dy < 0) continue; 
-              if (!isSouthboundAisle && d.dy > 0) continue; 
-          }
-
-          // 6. TURN PENALTY
+          // TURN PENALTY
           const isTurn = curr.dir !== null && (curr.dir.dx !== d.dx || curr.dir.dy !== d.dy);
-          const moveCost = isTurn ? 2.5 : 1.0; 
+          let moveCost = isTurn ? 2.5 : 1.0; 
 
+          // =========================================================================
+          // THE "DRIVEWAY" RULE (2-Way Dead-Ends, No Shortcuts)
+          // =========================================================================
+          if (NARROW_AISLE_COLS_SET.has(nx) && d.dy !== 0) {
+              // If this aisle is neither your starting column nor your destination column,
+              // DO NOT drive through it. Stay on the main horizontal highways.
+              if (nx !== gx && nx !== sx) {
+                  moveCost += 500.0;
+              }
+          }
+          
           const tentG = gScore.get(currKey) + moveCost;
 
           if (!gScore.has(nKey) || tentG < gScore.get(nKey)) {
