@@ -252,10 +252,11 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       }
   }
 
-  // Highway & Buffer Row definitions (Indian Left-Hand Traffic)
-  const EASTBOUND_ROWS = new Set([2, 22, 24, 44, 46]);
-  const WESTBOUND_ROWS = new Set([3, 4, 5, 23, 25, 26, 27, 45, 47]);
-  const NARROW_AISLE_COLS_SET = typeof NARROW_AISLE_COLS !== 'undefined' ? NARROW_AISLE_COLS : new Set();
+  // =========================================================================
+  // STRICT HIGHWAY DEFINITIONS (Only the main arteries!)
+  // =========================================================================
+  const EASTBOUND_ROWS = new Set([2, 24, 46]); // Top, Middle, Bottom East
+  const WESTBOUND_ROWS = new Set([3, 25, 47]); // Top, Middle, Bottom West
 
   const openSet = [];
   const gScore = new Map();
@@ -285,7 +286,6 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       }
 
       for (const d of dirs) {
-          // 1. Define the next cell coordinates (Restored!)
           const nx = curr.x + d.dx;
           const ny = curr.y + d.dy;
           const nKey = `${nx},${ny}`;
@@ -295,51 +295,48 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
           if (avoidSet.has(nKey) && nKey !== `${gx},${gy}`) continue;
 
           // =========================================================================
-          // CHARGER FREEZE FIX: Forward-First Exit and Entry Rules
+          // 1. CHARGER FREEZE FIX: Forward-First Exit and Entry Rules
           // =========================================================================
-          // If LEAVING a top charger (y=1), must go South (y=2) straight ahead
           if (curr.y === 1 && (ny !== 2 || nx !== curr.x)) continue;
-          // If LEAVING a bottom charger (y=48), must go North (y=47) straight ahead
           if (curr.y === 48 && (ny !== 47 || nx !== curr.x)) continue;
-          
-          // If ENTERING a top charger (y=1), must come from South (y=2) straight ahead
           if (ny === 1 && (curr.y !== 2 || curr.x !== nx)) continue;
-          // If ENTERING a bottom charger (y=48), must come from North (y=47) straight ahead
           if (ny === 48 && (curr.y !== 47 || curr.x !== nx)) continue;
-
-          // Prevent using charger cells as pass-throughs
           if ((ny === 1 || ny === 48) && (nx !== gx || ny !== gy) && (nx !== sx || ny !== sy)) continue;
 
-          // STRICT HORIZONTAL HIGHWAY ENFORCEMENT (1-way per lane)
-          if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue;
+          // =========================================================================
+          // 2. DOCK FACE FIX: Absolutely no vertical driving on the dock cells!
+          // =========================================================================
+          if ((nx === 1 || nx === 168) && d.dy !== 0) continue;
+
+          // =========================================================================
+          // 3. STRICT 1-WAY HIGHWAY ENFORCEMENT
+          // =========================================================================
           if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue;
+          if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue;
 
-          // STRICT VERTICAL HIGHWAY ENFORCEMENT (Dock lanes)
-          if (nx === 2 && d.dy > 0) continue; // Left lane goes strictly UP
-          if (nx === 3 && d.dy < 0) continue; // Right lane goes strictly DOWN
-          if (nx === 166 && d.dy > 0) continue; // Left lane goes strictly UP
-          if (nx === 167 && d.dy < 0) continue; // Right lane goes strictly DOWN
+          if (nx === 2 && d.dy > 0) continue;   // x=2 is strictly UP (North)
+          if (nx === 3 && d.dy < 0) continue;   // x=3 is strictly DOWN (South)
+          if (nx === 166 && d.dy > 0) continue; // x=166 is strictly UP (North)
+          if (nx === 167 && d.dy < 0) continue; // x=167 is strictly DOWN (South)
 
-          // TURN PENALTY
+          // =========================================================================
+          // 4. THE "DRIVEWAY" RULE (Massive penalty for cheating through buffers)
+          // =========================================================================
           const isTurn = curr.dir !== null && (curr.dir.dx !== d.dx || curr.dir.dy !== d.dy);
           let moveCost = isTurn ? 2.5 : 1.0; 
 
-          // =========================================================================
-          // THE "DRIVEWAY" RULE (Strictly Bi-Directional, No Through-Traffic)
-          // =========================================================================
-          const isHorizBuffer = (ny === 5 || ny === 22 || ny === 27 || ny === 44);
-          const isVertAisle = NARROW_AISLE_COLS_SET.has(nx);
+          const isHorizontalHighway = EASTBOUND_ROWS.has(ny) || WESTBOUND_ROWS.has(ny);
+          const isVerticalHighway = (nx === 2 || nx === 3 || nx === 166 || nx === 167 || (nx >= 80 && nx <= 89));
 
-          // 1. No Through-Traffic: Stay off someone else's driveway
-          if (isVertAisle && nx !== gx && nx !== sx) moveCost += 1000.0;
-          if (isHorizBuffer && ny !== gy && ny !== sy) moveCost += 1000.0;
-
-          // 2. Strict Bi-Directional Movement (No 4-way turns inside a driveway)
-          // If inside a vertical driveway, forbid horizontal steps (unless entering/exiting)
-          if (isVertAisle && d.dx !== 0 && ny !== sy && ny !== gy) moveCost += 1000.0;
+          // If moving vertically NOT on a highway, it's a driveway. Penalty if passing through.
+          if (!isVerticalHighway && d.dy !== 0) {
+              if (nx !== gx && nx !== sx) moveCost += 1000.0;
+          }
           
-          // If inside a horizontal driveway, forbid vertical steps (unless entering/exiting)
-          if (isHorizBuffer && d.dy !== 0 && nx !== sx && nx !== gx) moveCost += 1000.0;
+          // If moving horizontally NOT on a highway, it's a driveway. Penalty if passing through.
+          if (!isHorizontalHighway && d.dx !== 0) {
+              if (ny !== gy && ny !== sy) moveCost += 1000.0;
+          }
 
           const tentG = gScore.get(currKey) + moveCost;
 
@@ -351,63 +348,3 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
           }
       }
   }
-  return []; 
-}
-
-const GLOBAL_TRAJECTORIES = new Map(); 
-
-function setRobotPath(robot, newPath) {
-  if (!robot) return;
-  
-  if (!newPath || !Array.isArray(newPath) || newPath.length === 0) {
-    robot.path = [];
-    robot.pathIndex = 0;
-    return;
-  }
-
-  const rawDest = newPath[newPath.length - 1];
-  if (rawDest && typeof rawDest.x === 'number' && typeof rawDest.y === 'number') {
-    robot.currentDestination = { x: rawDest.x, y: rawDest.y };
-  }
-
-  const valid = [];
-  let prevX = robot.gridX !== undefined ? robot.gridX : Math.round(robot.x);
-  let prevY = robot.gridY !== undefined ? robot.gridY : Math.round(robot.y);
-
-  for (let i = 0; i < newPath.length; i++) {
-    const pt = newPath[i];
-    if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number') continue;
-    if (!isWalkable(pt.x, pt.y)) break;
-    
-    const manhattan = Math.abs(pt.x - prevX) + Math.abs(pt.y - prevY);
-    if (manhattan > 1) {
-      const bridge = findPath(prevX, prevY, pt.x, pt.y);
-      if (bridge && bridge.length > 0) {
-        valid.push(...bridge);
-        prevX = pt.x; prevY = pt.y;
-        continue;
-      }
-    }
-    valid.push({ x: pt.x, y: pt.y });
-    prevX = pt.x; prevY = pt.y;
-  }
-  robot.path = valid;
-  robot.pathIndex = 0;
-  robot.pathTimestamp = typeof totalSimSeconds !== 'undefined' ? totalSimSeconds : 0;
-  
-  // Re-broadcast intent immediately so peers see the new path
-  if (typeof zenohMesh !== 'undefined') {
-      const intentTube = robot.path.slice(0, 21).map(pt => [pt.x, pt.y]);
-      zenohMesh.publishHeartbeat(robot.id, robot.x, robot.y, {
-        robot_id: robot.id,
-        seq: (robot.heartbeatSeq || 0) + 1,
-        pose: { x: Number(robot.x.toFixed(2)), y: Number(robot.y.toFixed(2)), theta: Number(robot.heading.toFixed(2)) },
-        pose_confidence: Number((robot.pose_confidence || 1.0).toFixed(2)),
-        intent_tube: intentTube,
-        status_flags: 0,
-        priority: typeof getRobotPriority === 'function' ? getRobotPriority(robot) : 50,
-        path_timestamp: robot.pathTimestamp,
-        active_jam: null
-      });
-  }
-}
