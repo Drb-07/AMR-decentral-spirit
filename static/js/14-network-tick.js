@@ -213,7 +213,7 @@ function getAccessPointForRack(rx, ry, fromX, fromY, requestingRobotId = null) {
 }
 
 // =========================================================================
-// SPACE-TIME A* PATHFINDER: Strict Lanes & Zero Buffer Through-Traffic
+// SPACE-TIME A* PATHFINDER: Strict Lanes & Crosswalk Rules
 // =========================================================================
 function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
   if (sx === gx && sy === gy) return [];
@@ -250,10 +250,6 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       }
   }
 
-  const EASTBOUND_ROWS = new Set([2, 4, 24, 26, 46]); 
-  const WESTBOUND_ROWS = new Set([3, 23, 25, 45, 47]); 
-  const NARROW_AISLE_COLS_SET = typeof NARROW_AISLE_COLS !== 'undefined' ? NARROW_AISLE_COLS : new Set();
-
   const openSet = [];
   const gScore = new Map();
   const cameFrom = new Map();
@@ -263,6 +259,7 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
   gScore.set(startKey, 0);
 
   const dirs = [ {dx: 0, dy: -1}, {dx: 0, dy: 1}, {dx: -1, dy: 0}, {dx: 1, dy: 0} ];
+  const NARROW_AISLE_COLS_SET = typeof NARROW_AISLE_COLS !== 'undefined' ? NARROW_AISLE_COLS : new Set();
 
   while (openSet.length > 0) {
       openSet.sort((a, b) => a.f - b.f);
@@ -297,16 +294,30 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
           if (ny === 48 && (curr.y !== 47 || curr.x !== nx)) continue;
           if ((ny === 1 || ny === 48) && (nx !== gx || ny !== gy) && (nx !== sx || ny !== sy)) continue;
 
-          // 2. STRICT 1-WAY HIGHWAY ENFORCEMENT
-          if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue;
-          if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue;
+          // 2. DOCK BUFFERS (Crosswalk Rule): No vertical driving allowed on Docks or their immediate buffers.
+          // Forces robots to stay on x=3/4 and only step horizontally into x=1/2.
+          if ((nx === 1 || nx === 2 || nx === 167 || nx === 168) && d.dy !== 0) continue;
 
-          if (nx === 3 && d.dy < 0) continue;   // x=3 is strictly DOWN (South)
-          if (nx === 4 && d.dy > 0) continue;   // x=4 is strictly UP (North)
-          if (nx === 165 && d.dy < 0) continue; // x=165 is strictly DOWN (South)
-          if (nx === 166 && d.dy > 0) continue; // x=166 is strictly UP (North)
+          // 3. RACK BUFFERS (Crosswalk Rule): No horizontal driving allowed in the buffer spaces between racks and highways.
+          // Forces robots to stay on y=2/3/4 and only step vertically into the racks.
+          const isHorizontalBuffer = (ny === 1 || ny === 5 || ny === 22 || ny === 27 || ny === 44 || ny === 48);
+          const isRackZone = (nx >= 5 && nx <= 164);
+          if (isHorizontalBuffer && isRackZone && d.dx !== 0) continue;
 
-          // 3. NARROW AISLE DIRECTIONALITY
+          // 4. STRICT 1-WAY HIGHWAY ENFORCEMENT (Left-Hand Traffic)
+          const EASTBOUND_ROWS = new Set([2, 4, 24, 26, 46]); 
+          const WESTBOUND_ROWS = new Set([3, 23, 25, 45, 47]); 
+          
+          if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue; 
+          if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue; 
+
+          // Left-Hand vertical highways
+          if (nx === 3 && d.dy > 0) continue;   // x=3 is Left lane, goes UP (North)
+          if (nx === 4 && d.dy < 0) continue;   // x=4 is Right lane, goes DOWN (South)
+          if (nx === 165 && d.dy > 0) continue; // x=165 is Left lane, goes UP (North)
+          if (nx === 166 && d.dy < 0) continue; // x=166 is Right lane, goes DOWN (South)
+
+          // 5. NARROW AISLE DIRECTIONALITY
           const isVertAisle = NARROW_AISLE_COLS_SET.has(nx);
           if (isVertAisle && d.dy !== 0) {
               const isSouthboundAisle = (nx % 2 === 0);
@@ -314,17 +325,7 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
               if (!isSouthboundAisle && d.dy > 0) continue; 
           }
 
-          // 4. THE "DRIVEWAY" RULE (Crosswalks only, NO through-traffic)
-          const isVerticalHighway = (nx === 3 || nx === 4 || nx === 165 || nx === 166 || (nx >= 80 && nx <= 89));
-          const isHorizontalBuffer = (ny === 1 || ny === 5 || ny === 22 || ny === 27 || ny === 44 || ny === 48);
-
-          // Ban vertical driving in ALL buffer columns (forces them to only cross horizontally)
-          if (!isVerticalHighway && !isVertAisle && d.dy !== 0) continue;
-
-          // Ban horizontal driving in ALL buffer rows (forces them to only cross vertically)
-          if (isHorizontalBuffer && d.dx !== 0) continue;
-
-          // TURN PENALTY
+          // 6. TURN PENALTY
           const isTurn = curr.dir !== null && (curr.dir.dx !== d.dx || curr.dir.dy !== d.dy);
           const moveCost = isTurn ? 2.5 : 1.0; 
 
