@@ -324,7 +324,7 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
               // If this aisle is neither your starting column nor your destination column,
               // DO NOT drive through it. Stay on the main horizontal highways.
               if (nx !== gx && nx !== sx) {
-                  moveCost += 500.0;
+                  moveCost += 500.0; // Massive penalty forces them to avoid other ppls driveways
               }
           }
           
