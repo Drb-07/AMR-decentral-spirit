@@ -232,7 +232,6 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       for (const key of avoidCells) avoidSet.add(key);
   }
 
-  // Inject WHCA* Intent Tubes from Local Peers
   const reqRobot = typeof AMR_FLEET !== 'undefined' ? AMR_FLEET.find(b => b.id === requestingRobotId) : null;
   const peerData = reqRobot && reqRobot.localPeerTable ? Array.from(reqRobot.localPeerTable.values()) : [];
   
@@ -250,6 +249,10 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       }
   }
 
+  const EASTBOUND_ROWS = new Set([2, 22, 24, 44, 46]); 
+  const WESTBOUND_ROWS = new Set([3, 4, 5, 23, 25, 26, 27, 45, 47]); 
+  const NARROW_AISLE_COLS_SET = typeof NARROW_AISLE_COLS !== 'undefined' ? NARROW_AISLE_COLS : new Set();
+
   const openSet = [];
   const gScore = new Map();
   const cameFrom = new Map();
@@ -259,7 +262,6 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
   gScore.set(startKey, 0);
 
   const dirs = [ {dx: 0, dy: -1}, {dx: 0, dy: 1}, {dx: -1, dy: 0}, {dx: 1, dy: 0} ];
-  const NARROW_AISLE_COLS_SET = typeof NARROW_AISLE_COLS !== 'undefined' ? NARROW_AISLE_COLS : new Set();
 
   while (openSet.length > 0) {
       openSet.sort((a, b) => a.f - b.f);
@@ -295,31 +297,22 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
           if ((ny === 1 || ny === 48) && (nx !== gx || ny !== gy) && (nx !== sx || ny !== sy)) continue;
 
           // 2. DOCK BUFFERS (Crosswalk Rule): No vertical driving allowed on Docks or their immediate buffers.
-          // Forces robots to stay on x=3/4 and only step horizontally into x=1/2.
           if ((nx === 1 || nx === 2 || nx === 167 || nx === 168) && d.dy !== 0) continue;
 
-          // 3. RACK BUFFERS (Crosswalk Rule): No horizontal driving allowed in the buffer spaces between racks and highways.
-          // Forces robots to stay on y=2/3/4 and only step vertically into the racks.
-          const isHorizontalBuffer = (ny === 1 || ny === 5 || ny === 22 || ny === 27 || ny === 44 || ny === 48);
-          const isRackZone = (nx >= 5 && nx <= 164);
-          if (isHorizontalBuffer && isRackZone && d.dx !== 0) continue;
+          // 3. STRICT 1-WAY HORIZONTAL HIGHWAYS (Exempts the dock crosswalk zones so they can turn to leave!)
+          if (nx >= 5 && nx <= 164) {
+              if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue;
+              if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue;
+          }
 
-          // 4. STRICT 1-WAY HIGHWAY ENFORCEMENT (Left-Hand Traffic)
-          const EASTBOUND_ROWS = new Set([2, 4, 24, 26, 46]); 
-          const WESTBOUND_ROWS = new Set([3, 23, 25, 45, 47]); 
-          
-          if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue; 
-          if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue; 
-
-          // Left-Hand vertical highways
+          // 4. STRICT 1-WAY VERTICAL HIGHWAYS
           if (nx === 3 && d.dy > 0) continue;   // x=3 is Left lane, goes UP (North)
           if (nx === 4 && d.dy < 0) continue;   // x=4 is Right lane, goes DOWN (South)
           if (nx === 165 && d.dy > 0) continue; // x=165 is Left lane, goes UP (North)
           if (nx === 166 && d.dy < 0) continue; // x=166 is Right lane, goes DOWN (South)
 
           // 5. NARROW AISLE DIRECTIONALITY
-          const isVertAisle = NARROW_AISLE_COLS_SET.has(nx);
-          if (isVertAisle && d.dy !== 0) {
+          if (NARROW_AISLE_COLS_SET.has(nx) && d.dy !== 0) {
               const isSouthboundAisle = (nx % 2 === 0);
               if (isSouthboundAisle && d.dy < 0) continue; 
               if (!isSouthboundAisle && d.dy > 0) continue; 
