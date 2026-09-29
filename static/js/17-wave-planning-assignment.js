@@ -1,395 +1,557 @@
-// =========================================================================
-// DECENTRALIZED NETWORK TICK (Run this every frame in updateRobots)
-// =========================================================================
-function tickDecentralizedNetwork(dt) {
-  if (typeof zenohMesh !== 'undefined') zenohMesh.deliverMessages(AMR_FLEET);
-  const heartbeatInterval = typeof zenohMesh !== 'undefined' ? 1.0 / zenohMesh.config.messageRateHz : 0.1;
-  
-  for (const robot of AMR_FLEET) {
-    if (robot.pose_confidence === undefined) robot.pose_confidence = 1.0;
-    robot.pose_confidence = Math.max(0.2, robot.pose_confidence - (dt * 0.015)); 
+    // Order Batching & Wave Planning (Multi-Order Spatial Centroid Clustering)
+    // Deeply packs nearby outbound orders into dense consolidated wave trips up to payload capacity
+    function planOutboundWaveBatches() {
+      if (!outboundMissions || outboundMissions.length < 2) return;
 
-    for (const other of AMR_FLEET) {
-      if (robot.id !== other.id) {
-        const dist = Math.hypot(robot.x - other.x, robot.y - other.y);
-        if (dist < (robot.sensorRange || 6.0)) {
-           if (typeof hasLineOfSight === 'function' && hasLineOfSight(robot.x, robot.y, other.x, other.y)) {
-              robot.pose_confidence = Math.min(1.0, robot.pose_confidence + (dt * 0.5));
-           }
-        }
-      }
-    }
+      const pendingOrders = outboundMissions.filter(m => m.status === 'PENDING' && !m.assignedRobotId && m.itemsToPick && m.itemsToPick.length > 0);
+      if (pendingOrders.length < 2) return;
 
-    if (totalSimSeconds - (robot.lastHeartbeatSimTime || 0) >= heartbeatInterval) {
-      robot.lastHeartbeatSimTime = totalSimSeconds;
-      
-      let flags = 0;
-      if (robot.state !== 'IDLE' && robot.state !== 'IDLE_CHARGING') flags |= 1; 
-      if (robot.battery <= 25.0) flags |= 2;                                     
-      if (robot.isWaiting) flags |= 4;                                           
-
-      const rawTube = robot.path ? robot.path.slice(robot.pathIndex, robot.pathIndex + 21) : [];
-      const intentTube = rawTube.map(pt => [pt.x, pt.y]);
-
-      let activeTaskId = null;
-      if (robot.inboundMission) activeTaskId = robot.inboundMission.id;
-      else if (robot.outboundMission) activeTaskId = robot.outboundMission.orderId;
-      else if (robot.returnMission) activeTaskId = robot.returnMission.id;
-
-      if (!robot.heartbeatSeq) robot.heartbeatSeq = 0;
-      robot.heartbeatSeq++;
-
-      if (robot.isWaiting && robot.waitTimer > 1.5) {
-         robot.jamBroadcastTimer = 4.0; 
-      } else if (robot.jamBroadcastTimer > 0) {
-         robot.jamBroadcastTimer -= dt;
-      }
-      
-      let activeJam = null;
-      if (robot.jamBroadcastTimer > 0) {
-         activeJam = { x: Math.round(robot.x), y: Math.round(robot.y), radius: 2 };
-      }
-
-      const payload = {
-        robot_id: robot.id,
-        seq: robot.heartbeatSeq,
-        pose: { x: Number(robot.x.toFixed(2)), y: Number(robot.y.toFixed(2)), theta: Number(robot.heading.toFixed(2)) },
-        pose_confidence: Number(robot.pose_confidence.toFixed(2)), 
-        intent_tube: intentTube,
-        status_flags: flags,
-        priority: typeof getRobotPriority === 'function' ? getRobotPriority(robot) : 50,
-        active_task_id: activeTaskId,
-        path_timestamp: robot.pathTimestamp || 0,
-        active_jam: activeJam
-      };
-      
-      if (typeof zenohMesh !== 'undefined') zenohMesh.publishHeartbeat(robot.id, robot.x, robot.y, payload);
-    }
-    
-    // 3. Purge stale peer data & Self-Healing Task Continuity
-    if (robot.localPeerTable) {
-      for (const [peerId, peerData] of robot.localPeerTable.entries()) {
-        if (totalSimSeconds - peerData.timestamp > 5.0) { 
-          
-          // FALSE ALARM GUARD: Check if the peer is actually dead in the global fleet
-          const actualBot = typeof AMR_FLEET !== 'undefined' ? AMR_FLEET.find(b => b.id === peerId) : null;
-          const isActuallyDead = !actualBot || actualBot.isFaulted || actualBot.state === 'OUT_OF_CHARGE' || 
-                                 (totalSimSeconds - (actualBot.lastHeartbeatSimTime || 0) > 5.0);
-
-          if (isActuallyDead && typeof DECENTRALIZED_CBBA_MODE !== 'undefined' && DECENTRALIZED_CBBA_MODE && peerData.active_task_id) {
-             if (typeof zenohMesh !== 'undefined' && !zenohMesh.taskAnnouncements.has(peerData.active_task_id)) {
-                if (typeof logTerminal === 'function') logTerminal('ALERT', 'tag-yield', `🚨 <strong>Dead-Node Confirmed</strong>: <strong>${peerId}</strong> unresponsive. Recovering task <strong>${peerData.active_task_id}</strong>!`);
-                
-                let recoveredTask = null; let taskSpec = null;
-                
-                const inb = typeof inboundMissions !== 'undefined' ? inboundMissions.find(m => m.id === peerData.active_task_id) : null;
-                if (inb) { 
-                    inb.status = 'PENDING'; inb.assignedRobotId = null; recoveredTask = inb; 
-                    taskSpec = { kind: 'INBOUND', id: inb.id, ref: inb, targetX: inb.dockX, targetY: inb.dockY, totalWeight: inb.totalWeight, importance: inb.importance, slaPriority: typeof computeTaskPriorityScore === 'function' ? computeTaskPriorityScore(inb) : 50, desc: `Recovered Inbound ${inb.id}` }; 
-                }
-                
-                const outb = typeof outboundMissions !== 'undefined' ? outboundMissions.find(m => m.orderId === peerData.active_task_id) : null;
-                if (outb) { 
-                   outb.status = 'PENDING'; outb.assignedRobotId = null; recoveredTask = outb; 
-                   const tx = outb.itemsToPick && outb.itemsToPick[0] ? outb.itemsToPick[0].rack.x : 40;
-                   const ty = outb.itemsToPick && outb.itemsToPick[0] ? outb.itemsToPick[0].rack.y : 25;
-                   taskSpec = { kind: 'OUTBOUND', id: outb.orderId, ref: outb, targetX: tx, targetY: ty, totalWeight: outb.totalWeight, importance: outb.importance, slaPriority: typeof computeTaskPriorityScore === 'function' ? computeTaskPriorityScore(outb) : 50, desc: `Recovered Outbound ${outb.orderId}` };
-                }
-
-                const ret = typeof returnMissions !== 'undefined' ? returnMissions.find(m => m.id === peerData.active_task_id) : null;
-                if (ret) { 
-                   ret.status = 'PENDING'; ret.assignedRobotId = null; recoveredTask = ret; 
-                   taskSpec = { kind: 'RETURN', id: ret.id, ref: ret, targetX: ret.dockX, targetY: ret.dockY, totalWeight: ret.totalWeight, importance: ret.importance, slaPriority: typeof computeTaskPriorityScore === 'function' ? computeTaskPriorityScore(ret) : 50, desc: `Recovered Return ${ret.id}` };
-                }
-
-                if (recoveredTask && taskSpec) zenohMesh.announceTask(taskSpec);
-             }
-          }
-          robot.localPeerTable.delete(peerId);
-        }
-      }
-    }
-    
-    if (typeof DECENTRALIZED_CBBA_MODE !== 'undefined' && DECENTRALIZED_CBBA_MODE && typeof zenohMesh !== 'undefined') {
-        for (const task of zenohMesh.taskAnnouncements.values()) {
-            const isEligible = (robot.state === 'IDLE' || robot.state === 'IDLE_CHARGING' || robot.state === 'RETURNING_HOME');
-            const threshold = robot.proactiveChargeThreshold || 32.0;
-            if (isEligible && robot.battery >= threshold && !(robot.state === 'IDLE_CHARGING' && robot.battery < 75.0)) {
-                if (!task.bidders.has(robot.id)) {
-                    if (typeof evaluateMissionEnergyFeasibility === 'function') {
-                        const evalResult = evaluateMissionEnergyFeasibility(robot, task);
-                        if (evalResult.feasible) {
-                            const dist = Math.hypot(robot.x - task.targetX, robot.y - task.targetY);
-                            const tTravel = dist / (typeof ROBOT_BASE_SPEED !== 'undefined' ? ROBOT_BASE_SPEED : 2.5);
-                            let cCongestion = 0, cConflict = 0;
-                            if (robot.localPeerTable) {
-                                for (const p of robot.localPeerTable.values()) {
-                                    if (Math.hypot(robot.x - p.pose.x, robot.y - p.pose.y) < 5.0) cConflict += 5.0;
-                                }
-                            }
-                            const cBattery = Math.max(0, 100 - robot.battery) * 0.5;
-                            const cDeadline = - ((task.slaPriority || 0) * 0.8);
-                            const cost = tTravel + cCongestion + cBattery + cConflict + cDeadline;
-                            
-                            zenohMesh.publishBid(task.id, robot.id, cost, `Travel=${tTravel.toFixed(1)}, Batt=${cBattery.toFixed(1)}`);
-                            task.bidders.add(robot.id);
-                            robot.lastFeasibilityCheck = evalResult;
-                        }
-                    }
-                }
-            }
-            if (totalSimSeconds - task.announceTime > 0.5) {
-                const bids = zenohMesh.getBidsForTask(task.id);
-                if (bids.length > 0) {
-                    let best = bids[0];
-                    for (const b of bids) if (b.cost < best.cost || (Math.abs(b.cost - best.cost) < 0.01 && b.robotId < best.robotId)) best = b;
-                    if (best.robotId === robot.id && zenohMesh.claimTask(task.id, robot.id)) {
-                        if (typeof executeTaskAssignment === 'function') executeTaskAssignment(robot, task, robot.lastFeasibilityCheck, best);
-                    }
-                }
-            }
-        }
-        
-        const threshold = robot.proactiveChargeThreshold || 32.0;
-        const needsCharge = robot.state === 'IDLE' || robot.battery < threshold;
-        const isEligibleForCharge = robot.state !== 'IDLE_CHARGING' && robot.state !== 'RETURNING_HOME' && !robot.inboundMission && !robot.outboundMission && !robot.returnMission && !robot.isFaulted && !robot.isUnderMaintenance;
-
-        if (needsCharge && isEligibleForCharge) {
-            for (const bay of zenohMesh.chargeAnnouncements.values()) {
-                if (!bay.bidders.has(robot.id)) {
-                    const dist = Math.hypot(robot.x - bay.x, robot.y - bay.y);
-                    const cost = (dist / 4.0) - (Math.max(0, 100 - robot.battery) * 3.0);
-                    zenohMesh.publishChargeBid(bay.id, robot.id, cost, "ChgBid");
-                    bay.bidders.add(robot.id);
-                }
-                if (totalSimSeconds - bay.announceTime > 0.5) {
-                    const bids = zenohMesh.getChargeBids(bay.id);
-                    if (bids.length > 0) {
-                        let best = bids[0];
-                        for (const b of bids) if (b.cost < best.cost || (Math.abs(b.cost - best.cost) < 0.01 && b.robotId < best.robotId)) best = b;
-                        if (best.robotId === robot.id && zenohMesh.claimChargeBay(bay.id, robot.id)) {
-                            if (typeof reserveCharger === 'function') reserveCharger(bay.id, robot.id);
-                            if (typeof claimTerminalDestination === 'function') claimTerminalDestination(robot.id, bay.x, bay.y);
-                            robot.state = 'RETURNING_HOME';
-                            robot.statusBadge = robot.battery <= 25.0 ? 'LOW BATT' : 'TO CHG';
-                            const chgPath = findPath(robot.gridX, robot.gridY, bay.x, bay.y);
-                            setRobotPath(robot, chgPath);
-                            if (robot.path && robot.path.length === 0 && typeof onRobotReachedDestination === 'function') onRobotReachedDestination(robot);
-                        }
-                    }
-                }
-            }
-        }
-    }
-  }
-}
-
-function isWalkable(x, y) {
-  if (typeof mapData === 'undefined' || !mapData) return false;
-  if (x < 0 || x >= mapData.width || y < 0 || y >= mapData.height) return false;
-  return mapData.grid[x][y] !== 1;
-}
-
-function getAccessPointForRack(rx, ry, fromX, fromY, requestingRobotId = null) {
-  const dirs = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
-  let bestAny = null;
-  let minAnyDist = Infinity;
-
-  for (const d of dirs) {
-    const ax = rx + d.dx;
-    const ay = ry + d.dy;
-    if (isWalkable(ax, ay)) {
-      const dist = Math.abs(ax - fromX) + Math.abs(ay - fromY);
-      if (dist < minAnyDist) {
-        minAnyDist = dist;
-        bestAny = { x: ax, y: ay };
-      }
-    }
-  }
-  if (bestAny && requestingRobotId && typeof claimTerminalDestination === 'function') {
-      claimTerminalDestination(requestingRobotId, bestAny.x, bestAny.y);
-  }
-  return bestAny;
-}
-
-// =========================================================================
-// SPACE-TIME A* PATHFINDER: Strict Lanes & Zero Buffer Through-Traffic
-// =========================================================================
-function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
-  if (sx === gx && sy === gy) return [];
-  const width = mapData.width;
-  const height = mapData.height;
-  if (gx < 0 || gx >= width || gy < 0 || gy >= height || mapData.grid[gx][gy] === 1) {
-      const access = getAccessPointForRack(gx, gy, sx, sy, requestingRobotId);
-      if (!access) return [];
-      gx = access.x;
-      gy = access.y;
-      if (sx === gx && sy === gy) return [];
-  }
-
-  const avoidSet = new Set();
-  if (avoidCells) {
-      for (const key of avoidCells) avoidSet.add(key);
-  }
-
-  // Inject WHCA* Intent Tubes from Local Peers
-  const reqRobot = typeof AMR_FLEET !== 'undefined' ? AMR_FLEET.find(b => b.id === requestingRobotId) : null;
-  const peerData = reqRobot && reqRobot.localPeerTable ? Array.from(reqRobot.localPeerTable.values()) : [];
-  
-  for (const peer of peerData) {
-      if (peer.active_jam) {
-          const jx = peer.active_jam.x, jy = peer.active_jam.y, jrad = peer.active_jam.radius || 2;
-          for (let dx = -jrad; dx <= jrad; dx++) {
-              for (let dy = -jrad; dy <= jrad; dy++) avoidSet.add(`${jx+dx},${jy+dy}`);
-          }
-      }
-      if (peer.intent_tube && peer.intent_tube.length > 0) {
-          for (let i = 0; i < Math.min(4, peer.intent_tube.length); i++) {
-              avoidSet.add(`${Math.round(peer.intent_tube[i][0])},${Math.round(peer.intent_tube[i][1])}`);
-          }
-      }
-  }
-
-  const EASTBOUND_ROWS = new Set([2, 4, 24, 26, 46]); 
-  const WESTBOUND_ROWS = new Set([3, 23, 25, 45, 47]); 
-  const NARROW_AISLE_COLS_SET = typeof NARROW_AISLE_COLS !== 'undefined' ? NARROW_AISLE_COLS : new Set();
-
-  const openSet = [];
-  const gScore = new Map();
-  const cameFrom = new Map();
-
-  const startKey = `${sx},${sy}`;
-  openSet.push({ x: sx, y: sy, f: Math.abs(sx - gx) + Math.abs(sy - gy), dir: null });
-  gScore.set(startKey, 0);
-
-  const dirs = [ {dx: 0, dy: -1}, {dx: 0, dy: 1}, {dx: -1, dy: 0}, {dx: 1, dy: 0} ];
-
-  while (openSet.length > 0) {
-      openSet.sort((a, b) => a.f - b.f);
-      const curr = openSet.shift();
-      const currKey = `${curr.x},${curr.y}`;
-
-      if (curr.x === gx && curr.y === gy) {
-          const path = [];
-          let trace = currKey;
-          while (cameFrom.has(trace)) {
-              const node = cameFrom.get(trace);
-              path.push({ x: parseInt(trace.split(',')[0]), y: parseInt(trace.split(',')[1]) });
-              trace = `${node.x},${node.y}`;
-          }
-          path.reverse();
-          return path;
-      }
-
-      for (const d of dirs) {
-          const nx = curr.x + d.dx;
-          const ny = curr.y + d.dy;
-          const nKey = `${nx},${ny}`;
-
-          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-          if (mapData.grid[nx][ny] === 1) continue;
-          if (avoidSet.has(nKey) && nKey !== `${gx},${gy}`) continue;
-
-          // =========================================================================
-          // 1. THE "CROSSWALK" RULE: HARD BAN ON BUFFER THROUGH-TRAFFIC
-          // =========================================================================
-          // Docks & Vertical Buffers: Absolutely NO vertical driving parallel to the docks.
-          // You can only step horizontally IN and OUT of them.
-          if ((nx === 1 || nx === 2 || nx === 167 || nx === 168) && d.dy !== 0) continue;
-
-          // Racks, Chargers & Edge Buffers: Absolutely NO horizontal driving parallel to the racks.
-          // You can only step vertically IN and OUT of them.
-          if ((ny === 1 || ny === 5 || ny === 22 || ny === 27 || ny === 44 || ny === 48) && d.dx !== 0) continue;
-
-          // =========================================================================
-          // 2. STRICT 1-WAY HIGHWAY ENFORCEMENT
-          // =========================================================================
-          if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue;
-          if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue;
-
-          if (nx === 3 && d.dy < 0) continue;   // x=3 is strictly DOWN (South)
-          if (nx === 4 && d.dy > 0) continue;   // x=4 is strictly UP (North)
-          if (nx === 165 && d.dy < 0) continue; // x=165 is strictly DOWN (South)
-          if (nx === 166 && d.dy > 0) continue; // x=166 is strictly UP (North)
-
-          // Narrow Aisles between racks
-          if (NARROW_AISLE_COLS_SET.has(nx) && d.dy !== 0) {
-              const isSouthboundAisle = (nx % 2 === 0);
-              if (isSouthboundAisle && d.dy < 0) continue; 
-              if (!isSouthboundAisle && d.dy > 0) continue; 
-          }
-
-          // TURN PENALTY
-          const isTurn = curr.dir !== null && (curr.dir.dx !== d.dx || curr.dir.dy !== d.dy);
-          const moveCost = isTurn ? 2.5 : 1.0; 
-
-          const tentG = gScore.get(currKey) + moveCost;
-
-          if (!gScore.has(nKey) || tentG < gScore.get(nKey)) {
-              cameFrom.set(nKey, { x: curr.x, y: curr.y });
-              gScore.set(nKey, tentG);
-              const h = Math.abs(nx - gx) + Math.abs(ny - gy);
-              openSet.push({ x: nx, y: ny, f: tentG + h, dir: d });
-          }
-      }
-  }
-  return []; 
-}
-
-const GLOBAL_TRAJECTORIES = new Map(); 
-
-function setRobotPath(robot, newPath) {
-  if (!robot) return;
-  
-  if (!newPath || !Array.isArray(newPath) || newPath.length === 0) {
-    robot.path = [];
-    robot.pathIndex = 0;
-    return;
-  }
-
-  const rawDest = newPath[newPath.length - 1];
-  if (rawDest && typeof rawDest.x === 'number' && typeof rawDest.y === 'number') {
-    robot.currentDestination = { x: rawDest.x, y: rawDest.y };
-  }
-
-  const valid = [];
-  let prevX = robot.gridX !== undefined ? robot.gridX : Math.round(robot.x);
-  let prevY = robot.gridY !== undefined ? robot.gridY : Math.round(robot.y);
-
-  for (let i = 0; i < newPath.length; i++) {
-    const pt = newPath[i];
-    if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number') continue;
-    if (!isWalkable(pt.x, pt.y)) break;
-    
-    const manhattan = Math.abs(pt.x - prevX) + Math.abs(pt.y - prevY);
-    if (manhattan > 1) {
-      const bridge = findPath(prevX, prevY, pt.x, pt.y);
-      if (bridge && bridge.length > 0) {
-        valid.push(...bridge);
-        prevX = pt.x; prevY = pt.y;
-        continue;
-      }
-    }
-    valid.push({ x: pt.x, y: pt.y });
-    prevX = pt.x; prevY = pt.y;
-  }
-  robot.path = valid;
-  robot.pathIndex = 0;
-  robot.pathTimestamp = typeof totalSimSeconds !== 'undefined' ? totalSimSeconds : 0;
-  
-  // Re-broadcast intent immediately so peers see the new path
-  if (typeof zenohMesh !== 'undefined') {
-      const intentTube = robot.path.slice(0, 21).map(pt => [pt.x, pt.y]);
-      zenohMesh.publishHeartbeat(robot.id, robot.x, robot.y, {
-        robot_id: robot.id,
-        seq: (robot.heartbeatSeq || 0) + 1,
-        pose: { x: Number(robot.x.toFixed(2)), y: Number(robot.y.toFixed(2)), theta: Number(robot.heading.toFixed(2)) },
-        pose_confidence: Number((robot.pose_confidence || 1.0).toFixed(2)),
-        intent_tube: intentTube,
-        status_flags: 0,
-        priority: typeof getRobotPriority === 'function' ? getRobotPriority(robot) : 50,
-        path_timestamp: robot.pathTimestamp,
-        active_jam: null
+      // 1. Calculate spatial center-of-mass (centroid) for all pending orders
+      pendingOrders.forEach(ord => {
+        let sumX = 0, sumY = 0, validRacks = 0;
+        ord.itemsToPick.forEach(it => {
+          if (it.rack) { sumX += it.rack.x; sumY += it.rack.y; validRacks++; }
+        });
+        ord.centroid = validRacks > 0 ? { x: sumX / validRacks, y: sumY / validRacks } : { x: ord.bayX || 0, y: ord.bayY || 0 };
       });
-  }
-}
+
+      for (let i = 0; i < pendingOrders.length; i++) {
+        const ordA = pendingOrders[i];
+        if (ordA.status !== 'PENDING' || ordA.assignedRobotId) continue;
+
+        let mergedCount = 0;
+        const candidateIndices = [];
+        
+        // 2. Identify all other unassigned orders in the same zone
+        for (let j = i + 1; j < pendingOrders.length; j++) {
+          const ordB = pendingOrders[j];
+          if (ordB.status !== 'PENDING' || ordB.assignedRobotId) continue;
+          
+          const centroidDist = Math.abs(ordA.centroid.x - ordB.centroid.x) + Math.abs(ordA.centroid.y - ordB.centroid.y);
+          const sameBay = (ordA.bayId === ordB.bayId);
+          if (centroidDist <= 28 || sameBay) {
+             candidateIndices.push(j);
+          }
+        }
+
+        // 3. Sort candidates greedily by proximity to the anchor order's centroid
+        candidateIndices.sort((idx1, idx2) => {
+           const b1 = pendingOrders[idx1];
+           const b2 = pendingOrders[idx2];
+           const d1 = Math.abs(ordA.centroid.x - b1.centroid.x) + Math.abs(ordA.centroid.y - b1.centroid.y);
+           const d2 = Math.abs(ordA.centroid.x - b2.centroid.x) + Math.abs(ordA.centroid.y - b2.centroid.y);
+           return d1 - d2;
+        });
+
+        // 4. Continuously pack nearest orders until physical tote maxes out
+        for (const j of candidateIndices) {
+          const ordB = pendingOrders[j];
+          if (ordB.status !== 'PENDING' || ordB.assignedRobotId) continue;
+
+          if ((ordA.totalWeight + ordB.totalWeight) > 55.0) continue;
+          if ((ordA.totalItems + ordB.totalItems) > 10) continue;
+
+          if (!ordA.isWaveBatch) {
+            ordA.isWaveBatch = true;
+            ordA.waveOrderIds = [ordA.orderId];
+            ordA.pendingDeliveries = [{
+              bayId: ordA.bayId, bayX: ordA.bayX, bayY: ordA.bayY, orderId: ordA.orderId, itemsCount: ordA.totalItems, weight: ordA.totalWeight, importance: ordA.importance, createdSimTimeSec: ordA.createdSimTimeSec || totalSimSeconds
+            }];
+          }
+
+          ordA.waveOrderIds.push(ordB.orderId);
+          ordA.pendingDeliveries.push({
+            bayId: ordB.bayId, bayX: ordB.bayX, bayY: ordB.bayY, orderId: ordB.orderId, itemsCount: ordB.totalItems, weight: ordB.totalWeight, importance: ordB.importance, createdSimTimeSec: ordB.createdSimTimeSec || totalSimSeconds
+          });
+
+          // Inherit the highest SLA importance across the batched orders
+          if (computeTaskPriorityScore(ordB) > computeTaskPriorityScore(ordA)) {
+            ordA.importance = ordB.importance;
+          }
+
+          ordA.totalWeight = Number((ordA.totalWeight + ordB.totalWeight).toFixed(1));
+          ordA.totalItems += ordB.totalItems;
+          ordA.itemsToPick.push(...ordB.itemsToPick);
+
+          ordB.status = 'MERGED';
+          ordB.mergedIntoOrderId = ordA.orderId;
+          mergedCount++;
+        }
+
+        if (mergedCount > 0) {
+          ordA.itemsToPick = sortItemsByProximity(ordA.itemsToPick, ordA.bayX, ordA.bayY);
+          logTerminal('DISPATCH', 'tag-outbound', `📦 <strong>Wave Batch Created:</strong> Consolidated ${mergedCount + 1} orders into master batch <strong>${ordA.orderId}</strong> (${ordA.totalItems} items, ${ordA.totalWeight.toFixed(1)}kg) for optimal picking density.`);
+        }
+      }
+    }
+
+    // Helper: Sort picking sequence using 2-opt TSP heuristic
+    function sortItemsByProximity(items, startX, startY) {
+      if (!items || items.length <= 1) return items;
+      const sorted = [];
+      const remaining = [...items];
+      let curX = startX;
+      let curY = startY;
+
+      while (remaining.length > 0) {
+        let bestIdx = -1;
+        let bestDist = Infinity;
+        for (let i = 0; i < remaining.length; i++) {
+          const r = remaining[i].rack;
+          if (!r) continue;
+          const dist = Math.abs(r.x - curX) + Math.abs(r.y - curY);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestIdx = i;
+          }
+        }
+        if (bestIdx !== -1) {
+          const nextPick = remaining.splice(bestIdx, 1)[0];
+          sorted.push(nextPick);
+          curX = nextPick.rack.x;
+          curY = nextPick.rack.y;
+        } else {
+          sorted.push(remaining.shift());
+        }
+      }
+
+      // 2-Opt Optimization Step: Uncross path loops if 3 or more picks
+      if (sorted.length >= 3) {
+        let improved = true;
+        let iter = 0;
+        while (improved && iter < 6) {
+          improved = false;
+          iter++;
+          for (let i = 0; i < sorted.length - 1; i++) {
+            for (let k = i + 1; k < sorted.length; k++) {
+              const pA = sorted[i].rack, pB = sorted[i+1].rack;
+              const pC = sorted[k].rack, pD = (k + 1 < sorted.length) ? sorted[k+1].rack : null;
+              if (!pA || !pB || !pC) continue;
+
+              const dCurrent = (Math.abs(pA.x - pB.x) + Math.abs(pA.y - pB.y)) + (pD ? (Math.abs(pC.x - pD.x) + Math.abs(pC.y - pD.y)) : 0);
+              const dReversed = (Math.abs(pA.x - pC.x) + Math.abs(pA.y - pC.y)) + (pD ? (Math.abs(pB.x - pD.x) + Math.abs(pB.y - pD.y)) : 0);
+
+              if (dReversed < dCurrent - 0.5) {
+                // Reverse subarray between i+1 and k
+                const segment = sorted.slice(i + 1, k + 1).reverse();
+                sorted.splice(i + 1, segment.length, ...segment);
+                improved = true;
+              }
+            }
+          }
+        }
+      }
+
+      return sorted;
+    }
+
+    // Dynamic SLA Multiplier & Urgency Calculation
+    function computeTaskPriorityScore(mission) {
+      let score = 50;
+      if (mission.importance) {
+        if (mission.importance.code === 'VIP_EXPRESS') score += 50;
+        else if (mission.importance.code === 'STANDARD_PRIORITY') score += 25;
+        else if (mission.importance.code === 'ECONOMY_SAVER') score += 5;
+      }
+      if (mission.createdSimTimeSec !== undefined) {
+        const elapsed = totalSimSeconds - mission.createdSimTimeSec;
+        score += Math.min(40, elapsed * 0.8);
+      }
+      return score;
+    }
+
+    // Energy Feasibility Estimator (Proactive BMS Safeguard)
+    function evaluateMissionEnergyFeasibility(robot, taskSpec) {
+      const TARE_MASS = 145.0;
+      const totalMass = TARE_MASS + (taskSpec.totalWeight || 0);
+      const estSpeed = ROBOT_BASE_SPEED * (1.0 - (taskSpec.totalWeight || 0) / 55.0 * 0.28);
+
+      let totalDist = Math.abs(robot.gridX - taskSpec.targetX) + Math.abs(robot.gridY - taskSpec.targetY);
+
+      if (taskSpec.type === 'INBOUND' && taskSpec.parcels) {
+        let lastX = taskSpec.targetX, lastY = taskSpec.targetY;
+        taskSpec.parcels.forEach(p => {
+          if (p.rackSlot && p.rackSlot.rack) {
+            totalDist += Math.abs(p.rackSlot.rack.x - lastX) + Math.abs(p.rackSlot.rack.y - lastY);
+            lastX = p.rackSlot.rack.x; lastY = p.rackSlot.rack.y;
+          }
+        });
+      } else if (taskSpec.type === 'OUTBOUND' && taskSpec.itemsToPick) {
+        let lastX = taskSpec.targetX, lastY = taskSpec.targetY;
+        taskSpec.itemsToPick.forEach(it => {
+          if (it.rack) {
+            totalDist += Math.abs(it.rack.x - lastX) + Math.abs(it.rack.y - lastY);
+            lastX = it.rack.x; lastY = it.rack.y;
+          }
+        });
+        totalDist += Math.abs(taskSpec.bayX - lastX) + Math.abs(taskSpec.bayY - lastY);
+      }
+
+      const estTripSec = totalDist / estSpeed;
+      const estWatts = 45 + ((totalMass * 0.016 * 9.81 * estSpeed * 0.8) / 0.85);
+      const estDrainRate = (estWatts / 165.0) * 0.16;
+      const totalEnergyCostSoC = estDrainRate * estTripSec;
+
+      const finishSoC = robot.battery - totalEnergyCostSoC;
+      const safeFloor = (robot.proactiveChargeThreshold || 32.0);
+      const feasible = finishSoC >= safeFloor;
+
+      return {
+        feasible,
+        totalDist: Math.round(totalDist),
+        estTripSec: Math.round(estTripSec),
+        totalEnergyCostSoC: Number(totalEnergyCostSoC.toFixed(1)),
+        finishSoC: Number(finishSoC.toFixed(1)),
+        margin: Number((finishSoC - safeFloor).toFixed(1))
+      };
+    }
+
+    // Cleanly un-occupies charger when a robot leaves to start a mission
+    function undockFromCharger(robotId) {
+      for (const p of CHARGING_PORTS) {
+        if (p.occupiedBy === robotId) p.occupiedBy = null;
+        if (p.reservedBy === robotId) p.reservedBy = null;
+      }
+      const bot = AMR_FLEET.find(b => b.id === robotId);
+      if (bot) {
+        bot.currentChargerId = null;
+        bot.targetChargerId = null;
+        releaseTerminalClaim(bot.id, bot.gridX, bot.gridY);
+      }
+    }
+
+    // Helper function executed by either CBBA Consensus or Hungarian Allocator
+    function executeTaskAssignment(robot, task, evalResult, bestBid) {
+      if (!task || !task.ref) {
+        console.warn(`[Assignment] Aborted: Missing 'ref' for task ID: ${task ? task.id : 'unknown'}`);
+        return;
+      }
+
+      const mission = task.ref;
+      const bidReason = (bestBid && bestBid.reason) ? ` (${bestBid.reason})` : '';
+      const evalRes = evalResult || robot.lastFeasibilityCheck || null;
+
+      if (task.kind === 'INBOUND') {
+        undockFromCharger(robot.id);
+        mission.status = 'ASSIGNED';
+        mission.assignedRobotId = robot.id;
+        robot.state = 'MOVING_TO_PICKUP';
+        robot.inboundMission = mission;
+        robot.missionStartTime = Date.now();
+        robot.targetDesc = `Dock ${mission.dockId} (Inbound Load: ${mission.parcels.length} pkgs)`;
+        claimTerminalDestination(robot.id, mission.dockX, mission.dockY);
+        setRobotPath(robot, findPath(robot.gridX, robot.gridY, mission.dockX, mission.dockY));
+
+        const strategyTag = DECENTRALIZED_CBBA_MODE ? 'CBBA Consensus' : 'Hungarian Opt';
+        logTerminal('DISPATCH', 'tag-inbound', `⚡ <strong>${robot.id}</strong> Assigned (${strategyTag}, SLA: <span style="color:${mission.importance.color};font-weight:700;">${mission.importance.shortLabel || mission.importance.code}</span>): Dock <strong>${mission.dockId}</strong> (${mission.parcels.length} pkgs, +${evalRes ? evalRes.margin : '0'}% margin, SoC: <strong>${robot.battery.toFixed(1)}%</strong>). Undocked from charger.${bidReason}`);
+
+        if (robot.path.length === 0) onRobotReachedDestination(robot);
+
+      } else if (task.kind === 'OUTBOUND') {
+        if (!mission || mission.status === 'MERGED' || !mission.itemsToPick || mission.itemsToPick.length === 0) {
+          if (typeof logTerminal === 'function') {
+            logTerminal('ALERT', 'tag-yield', `⚠️ <strong>${robot.id}</strong> claimed stale/consumed task <strong>${task.id || (mission && mission.orderId)}</strong> (likely merged into a wave batch). Dropping claim, returning to IDLE.`);
+          }
+          robot.state = 'IDLE';
+          return;
+        }
+
+        undockFromCharger(robot.id);
+        mission.status = 'ASSIGNED';
+        mission.assignedRobotId = robot.id;
+        mission.itemsToPick = sortItemsByProximity(mission.itemsToPick, robot.gridX, robot.gridY);
+        const currentPick = mission.itemsToPick[0];
+        robot.state = 'ORDER_PICKING';
+        robot.outboundMission = mission;
+        robot.missionStartTime = Date.now();
+        robot.orderBox = {
+          orderId: mission.orderId,
+          bayId: mission.bayId,
+          totalItems: mission.totalItems,
+          items: [],
+          importance: mission.importance,
+          totalWeight: mission.totalWeight,
+          isWaveBatch: !!mission.isWaveBatch
+        };
+        const access = getAccessPointForRack(currentPick.rack.x, currentPick.rack.y, robot.gridX, robot.gridY, robot.id);
+        robot.targetDesc = `${mission.isWaveBatch ? 'Wave Pick' : 'Order Pick'} 1/${mission.totalItems} for ${mission.orderId} at Rack (${currentPick.rack.x},${currentPick.rack.y})`;
+        robot.statusBadge = `PICK 0/${mission.totalItems}`;
+
+        const strategyTag = DECENTRALIZED_CBBA_MODE ? 'CBBA Consensus' : 'Hungarian Opt';
+        logTerminal('DISPATCH', 'tag-outbound', `⚡ <strong>${robot.id}</strong> Assigned (${strategyTag}, SLA: <span style="color:${mission.importance.color};font-weight:700;">${mission.importance.shortLabel || mission.importance.code}</span>): ${mission.isWaveBatch ? 'Wave Batch' : 'Order'} <strong>${mission.orderId}</strong> (${mission.totalItems} items, ${mission.totalWeight.toFixed(1)}kg, +${evalRes ? evalRes.margin : '0'}% margin, SoC: <strong>${robot.battery.toFixed(1)}%</strong>). Undocked from charger.${bidReason}`);
+
+        if (access) {
+          setRobotPath(robot, findPath(robot.gridX, robot.gridY, access.x, access.y));
+          if (robot.path.length === 0) onRobotReachedDestination(robot);
+        }
+
+      } else if (task.kind === 'RETURN') {
+        undockFromCharger(robot.id);
+        mission.status = 'ASSIGNED';
+        mission.assignedRobotId = robot.id;
+        robot.state = 'MOVING_TO_RETURN_DOCK';
+        robot.returnMission = mission;
+        robot.missionStartTime = Date.now();
+        robot.targetDesc = `Returns Dock ${mission.dockId} (Putback: ${mission.parcels.length} item(s))`;
+        robot.statusBadge = 'RETURN';
+        claimTerminalDestination(robot.id, mission.dockX, mission.dockY);
+        setRobotPath(robot, findPath(robot.gridX, robot.gridY, mission.dockX, mission.dockY));
+        logTerminal('DISPATCH', 'tag-inbound', `♻️ <strong>${robot.id}</strong> dispatched for Returns Putback: Dock <strong>${mission.dockId}</strong> (${mission.parcels.length} item(s), ${mission.totalWeight.toFixed(1)}kg)${bidReason}`);
+        if (robot.path.length === 0) onRobotReachedDestination(robot);
+      }
+    }
+
+    function dispatchFleet() {
+      planOutboundWaveBatches();
+
+      const candidateTasks = [];
+
+      for (const mission of inboundMissions) {
+        if (mission.status === 'PENDING') {
+          const dockBusy = inboundMissions.some(m => m.status === 'ASSIGNED' && m.dockId === mission.dockId) ||
+                           AMR_FLEET.some(b => (b.inboundMission && b.inboundMission.dockId === mission.dockId) ||
+                                               (Math.hypot(b.x - mission.dockX, b.y - mission.dockY) < 1.5));
+          if (!dockBusy) {
+            candidateTasks.push({
+              kind: 'INBOUND',
+              ref: mission,
+              dockId: mission.dockId,
+              targetX: mission.dockX,
+              targetY: mission.dockY,
+              totalWeight: mission.totalWeight,
+              parcels: mission.parcels,
+              importance: mission.importance,
+              createdAt: mission.createdAt,
+              slaPriority: computeTaskPriorityScore(mission),
+              desc: `Inbound Load at Dock ${mission.dockId}`
+            });
+          }
+        }
+      }
+
+      for (const mission of outboundMissions) {
+        if (mission.status === 'PENDING' && mission.itemsToPick && mission.itemsToPick.length > 0) {
+          const firstPick = mission.itemsToPick[0];
+          if (firstPick && firstPick.rack) {
+            candidateTasks.push({
+              kind: 'OUTBOUND',
+              ref: mission,
+              orderId: mission.orderId,
+              bayId: mission.bayId,
+              targetX: firstPick.rack.x,
+              targetY: firstPick.rack.y,
+              totalWeight: mission.totalWeight,
+              totalItems: mission.totalItems,
+              itemsToPick: mission.itemsToPick,
+              importance: mission.importance,
+              createdAt: mission.createdAt,
+              slaPriority: computeTaskPriorityScore(mission),
+              desc: mission.isWaveBatch ? `Wave Order ${mission.orderId}` : `Order ${mission.orderId}`
+            });
+          }
+        }
+      }
+
+      for (const mission of returnMissions) {
+        if (mission.status === 'PENDING') {
+          const dockBusy = returnMissions.some(m => m.status === 'ASSIGNED' && m.dockId === mission.dockId) ||
+                           AMR_FLEET.some(b => b.returnMission && b.returnMission.dockId === mission.dockId);
+          if (!dockBusy) {
+            candidateTasks.push({
+              kind: 'RETURN',
+              ref: mission,
+              dockId: mission.dockId,
+              targetX: mission.dockX,
+              targetY: mission.dockY,
+              totalWeight: mission.totalWeight,
+              parcels: mission.parcels,
+              importance: mission.importance,
+              createdAt: mission.createdAt,
+              slaPriority: computeTaskPriorityScore(mission) - 5,
+              desc: `Returns Putback at Dock ${mission.dockId}`
+            });
+          }
+        }
+      }
+
+      candidateTasks.sort((a, b) => b.slaPriority - a.slaPriority);
+
+      const eligibleRobots = [];
+      for (const robot of AMR_FLEET) {
+        if (robot.isFaulted || robot.isUnderMaintenance || robot.state === 'HARDWARE_FAULT' || robot.state === 'MARKED_FOR_MAINTENANCE') continue;
+        const isEligibleState = (robot.state === 'IDLE' || robot.state === 'IDLE_CHARGING' || robot.state === 'RETURNING_HOME');
+        if (!isEligibleState) continue;
+
+        const threshold = robot.proactiveChargeThreshold || 32.0;
+        if (robot.battery < threshold) {
+          if (robot.state === 'IDLE') {
+            routeRobotToNearestCharger(robot, 'PROACTIVE_STAGGERED_CHARGE');
+          }
+          continue;
+        }
+
+        if (robot.state === 'IDLE_CHARGING' && robot.battery < 75.0) continue;
+
+        eligibleRobots.push(robot);
+      }
+
+      if (DECENTRALIZED_CBBA_MODE) {
+         for (const task of candidateTasks) {
+            task.id = task.kind === 'INBOUND' ? task.ref.id : (task.kind === 'OUTBOUND' ? task.ref.orderId : task.ref.id);
+            zenohMesh.announceTask(task);
+         }
+         
+         if (typeof CHARGING_PORTS !== 'undefined') {
+           for (const port of CHARGING_PORTS) {
+             if (!port.isFaulted && !port.occupiedBy && !port.reservedBy) {
+               zenohMesh.announceChargeBay({ id: port.id, x: port.x, y: port.y, zone: port.zone });
+             }
+           }
+         }
+      } else {
+         if (candidateTasks.length > 0 && eligibleRobots.length > 0) {
+           const N = eligibleRobots.length;
+           const M = candidateTasks.length;
+           const utilityMatrix = [];
+           const evalCache = {};
+
+           for (let i = 0; i < N; i++) {
+             utilityMatrix[i] = [];
+             const robot = eligibleRobots[i];
+
+             for (let j = 0; j < M; j++) {
+               const task = candidateTasks[j];
+               const taskSpec = task.kind === 'INBOUND' ? {
+                 type: 'INBOUND',
+                 dockId: task.dockId,
+                 dockX: task.targetX,
+                 dockY: task.targetY,
+                 parcels: task.parcels,
+                 totalWeight: task.totalWeight,
+                 desc: task.desc
+               } : {
+                 type: 'OUTBOUND',
+                 rack: { x: task.targetX, y: task.targetY },
+                 itemsToPick: task.itemsToPick,
+                 bayId: task.bayId,
+                 bayX: task.ref.bayX,
+                 bayY: task.ref.bayY,
+                 totalWeight: task.totalWeight,
+                 desc: task.desc
+               };
+
+               const evalResult = evaluateMissionEnergyFeasibility(robot, taskSpec);
+               evalCache[`${i}_${j}`] = evalResult;
+
+               if (!evalResult.feasible) {
+                 utilityMatrix[i][j] = -10000;
+                 continue;
+               }
+
+               const dist = Math.abs(robot.gridX - task.targetX) + Math.abs(robot.gridY - task.targetY);
+               const distScore = Math.max(0, 100 - dist);
+               const slaScore = task.slaPriority * 1.5;
+               const battScore = robot.battery * 0.4;
+               utilityMatrix[i][j] = distScore + slaScore + battScore;
+             }
+           }
+
+           const maxDim = Math.max(N, M);
+           const costMatrix = [];
+           for (let i = 0; i < maxDim; i++) {
+             costMatrix[i] = [];
+             for (let j = 0; j < maxDim; j++) {
+               if (i < N && j < M) {
+                 costMatrix[i][j] = 10000 - utilityMatrix[i][j];
+               } else {
+                 costMatrix[i][j] = 10000;
+               }
+             }
+           }
+
+           const assignments = solveAssignmentHungarian(costMatrix);
+
+           for (let i = 0; i < N; i++) {
+             const j = assignments[i];
+             if (j !== undefined && j < M) {
+               const utility = utilityMatrix[i][j];
+               if (utility > -5000) {
+                 const robot = eligibleRobots[i];
+                 const task = candidateTasks[j];
+                 const evalResult = evalCache[`${i}_${j}`];
+                 executeTaskAssignment(robot, task, evalResult, null);
+               }
+             }
+           }
+         }
+      }
+
+      if (!DECENTRALIZED_CBBA_MODE) {
+        for (const robot of AMR_FLEET) {
+          if (robot.state === 'IDLE' && robot.battery < 80.0) {
+            routeRobotToNearestCharger(robot, 'OPPORTUNITY_CHARGE');
+          }
+        }
+      }
+    }
+
+    // Complete Kuhn-Munkres (Hungarian Algorithm) for Optimal Fleet Assignment
+    function solveAssignmentHungarian(matrix) {
+      const n = matrix.length;
+      const u = new Array(n + 1).fill(0);
+      const v = new Array(n + 1).fill(0);
+      const p = new Array(n + 1).fill(0);
+      const way = new Array(n + 1).fill(0);
+
+      for (let i = 1; i <= n; i++) {
+        p[0] = i;
+        let j0 = 0;
+        const minv = new Array(n + 1).fill(Infinity);
+        const used = new Array(n + 1).fill(false);
+
+        do {
+          used[j0] = true;
+          const i0 = p[j0];
+          let delta = Infinity;
+          let j1 = 0;
+
+          for (let j = 1; j <= n; j++) {
+            if (!used[j]) {
+              const cur = matrix[i0 - 1][j - 1] - u[i0] - v[j];
+              if (cur < minv[j]) {
+                minv[j] = cur;
+                way[j] = j0;
+              }
+              if (minv[j] < delta) {
+                delta = minv[j];
+                j1 = j;
+              }
+            }
+          }
+
+          for (let j = 0; j <= n; j++) {
+            if (used[j]) {
+              u[p[j]] += delta;
+              v[j] -= delta;
+            } else {
+              minv[j] -= delta;
+            }
+          }
+          j0 = j1;
+        } while (p[j0] !== 0);
+
+        do {
+          const j1 = way[j0];
+          p[j0] = p[j1];
+          j0 = j1;
+        } while (j0 !== 0);
+      }
+
+      const result = new Array(n);
+      for (let j = 1; j <= n; j++) {
+        if (p[j] !== 0) {
+          result[p[j] - 1] = j - 1;
+        }
+      }
+      return result;
+    }
