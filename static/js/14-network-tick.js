@@ -252,9 +252,9 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       }
   }
 
-  // Highway & Buffer Row definitions
-  const WESTBOUND_ROWS = new Set([2, 22, 24, 44, 46]);
-  const EASTBOUND_ROWS = new Set([3, 4, 5, 23, 25, 26, 27, 45, 47]);
+  // Highway & Buffer Row definitions (Indian Left-Hand Traffic)
+  const EASTBOUND_ROWS = new Set([2, 22, 24, 44, 46]);
+  const WESTBOUND_ROWS = new Set([3, 4, 5, 23, 25, 26, 27, 45, 47]);
   const NARROW_AISLE_COLS_SET = typeof NARROW_AISLE_COLS !== 'undefined' ? NARROW_AISLE_COLS : new Set();
 
   const openSet = [];
@@ -285,6 +285,31 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
       }
 
       for (const d of dirs) {
+          // 1. Define the next cell coordinates
+          const nx = curr.x + d.dx;
+          const ny = curr.y + d.dy;
+          const nKey = `${nx},${ny}`;
+
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+          if (mapData.grid[nx][ny] === 1) continue;
+          if (avoidSet.has(nKey) && nKey !== `${gx},${gy}`) continue;
+
+          // =========================================================================
+          // CHARGER FREEZE FIX: Forward-First Exit and Entry Rules
+          // =========================================================================
+          // If LEAVING a top charger (y=1), must go South (y=2) straight ahead
+          if (curr.y === 1 && (ny !== 2 || nx !== curr.x)) continue;
+          // If LEAVING a bottom charger (y=48), must go North (y=47) straight ahead
+          if (curr.y === 48 && (ny !== 47 || nx !== curr.x)) continue;
+          
+          // If ENTERING a top charger (y=1), must come from South (y=2) straight ahead
+          if (ny === 1 && (curr.y !== 2 || curr.x !== nx)) continue;
+          // If ENTERING a bottom charger (y=48), must come from North (y=47) straight ahead
+          if (ny === 48 && (curr.y !== 47 || curr.x !== nx)) continue;
+
+          // Prevent using charger cells as pass-throughs
+          if ((ny === 1 || ny === 48) && (nx !== gx || ny !== gy) && (nx !== sx || ny !== sy)) continue;
+
           // STRICT HORIZONTAL HIGHWAY ENFORCEMENT (1-way per lane)
           if (WESTBOUND_ROWS.has(ny) && d.dx > 0) continue;
           if (EASTBOUND_ROWS.has(ny) && d.dx < 0) continue;
@@ -316,9 +341,6 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
           // If inside a horizontal driveway, forbid vertical steps (unless entering/exiting)
           if (isHorizBuffer && d.dy !== 0 && nx !== sx && nx !== gx) moveCost += 1000.0;
 
-          const tentG = gScore.get(currKey) + moveCost;
-          }
-          
           const tentG = gScore.get(currKey) + moveCost;
 
           if (!gScore.has(nKey) || tentG < gScore.get(nKey)) {
