@@ -228,17 +228,20 @@
     }
 
     // Helper function executed by either CBBA Consensus or Hungarian Allocator
+    // Helper function executed by either CBBA Consensus or Hungarian Allocator
     function executeTaskAssignment(robot, task, evalResult, bestBid) {
-    // 1. CRASH GUARD: Abort if the task reference is missing or corrupted
-    if (!task || !task.ref) {
-        console.warn(`[Assignment] Aborted: Missing 'ref' for task ID: ${task ? task.id : 'unknown'}`);
-        return;
-    }
+      // 1. CRASH GUARD: Abort if the task reference is missing or corrupted
+      if (!task || !task.ref) {
+          console.warn(`[Assignment] Aborted: Missing 'ref' for task ID: ${task ? task.id : 'unknown'}`);
+          return;
+      }
 
-    const mission = task.ref;
+      // Safely define the bid reason string to prevent ReferenceErrors
+      const bidReason = (bestBid && bestBid.details) ? ` [Bid details: ${bestBid.details}]` : '';
+
       if (task.kind === 'INBOUND') {
         const mission = task.ref;
-        undockFromCharger(robot.id);
+        if (typeof undockFromCharger === 'function') undockFromCharger(robot.id);
         mission.status = 'ASSIGNED';
         mission.assignedRobotId = robot.id;
         robot.state = 'MOVING_TO_PICKUP';
@@ -248,30 +251,30 @@
         claimTerminalDestination(robot.id, mission.dockX, mission.dockY);
         setRobotPath(robot, findPath(robot.gridX, robot.gridY, mission.dockX, mission.dockY));
 
-        const strategyTag = DECENTRALIZED_CBBA_MODE ? 'CBBA Consensus' : 'Hungarian Opt';
-        logTerminal('DISPATCH', 'tag-inbound', `⚡ <strong>${robot.id}</strong> Assigned (${strategyTag}, SLA: <span style="color:${mission.importance.color};font-weight:700;">${mission.importance.shortLabel || mission.importance.code}</span>): Dock <strong>${mission.dockId}</strong> (${mission.parcels.length} pkgs, +${evalRes ? evalRes.margin : '0'}% margin, SoC: <strong>${robot.battery.toFixed(1)}%</strong>). Undocked from charger.${bidReason}`);
+        const strategyTag = (typeof DECENTRALIZED_CBBA_MODE !== 'undefined' && DECENTRALIZED_CBBA_MODE) ? 'CBBA Consensus' : 'Hungarian Opt';
+        if (typeof logTerminal === 'function') {
+           logTerminal('DISPATCH', 'tag-inbound', `⚡ <strong>${robot.id}</strong> Assigned (${strategyTag}, SLA: <span style="color:${mission.importance.color};font-weight:700;">${mission.importance.shortLabel || mission.importance.code}</span>): Dock <strong>${mission.dockId}</strong> (${mission.parcels.length} pkgs, +${evalResult ? evalResult.margin : '0'}% margin, SoC: <strong>${robot.battery.toFixed(1)}%</strong>). Undocked from charger.${bidReason}`);
+        }
 
-        if (robot.path.length === 0) onRobotReachedDestination(robot);
+        if (robot.path.length === 0 && typeof onRobotReachedDestination === 'function') onRobotReachedDestination(robot);
 
       } else if (task.kind === 'OUTBOUND') {
         const mission = task.ref;
 
-        // Defensive validation: in a decentralized system, a task claim can arrive
-        // after the underlying mission was merged/cancelled by a concurrent process
-        // (e.g. wave-batch consolidation). Never crash on a stale claim - just drop it
-        // and let the robot go idle to pick up fresh work next dispatch cycle.
         if (!mission || mission.status === 'MERGED' || !mission.itemsToPick || mission.itemsToPick.length === 0) {
           if (typeof logTerminal === 'function') {
-            logTerminal('ALERT', 'tag-yield', `⚠️ <strong>${robot.id}</strong> claimed stale/consumed task <strong>${task.id || (mission && mission.orderId)}</strong> (likely merged into a wave batch). Dropping claim, returning to IDLE.`);
+            logTerminal('ALERT', 'tag-yield', `⚠️ <strong>${robot.id}</strong> claimed stale/consumed task <strong>${task.id || (mission && mission.orderId)}</strong>. Dropping claim, returning to IDLE.`);
           }
           robot.state = 'IDLE';
           return;
         }
 
-        undockFromCharger(robot.id);
+        if (typeof undockFromCharger === 'function') undockFromCharger(robot.id);
         mission.status = 'ASSIGNED';
         mission.assignedRobotId = robot.id;
-        mission.itemsToPick = sortItemsByProximity(mission.itemsToPick, robot.gridX, robot.gridY);
+        if (typeof sortItemsByProximity === 'function') {
+            mission.itemsToPick = sortItemsByProximity(mission.itemsToPick, robot.gridX, robot.gridY);
+        }
         const currentPick = mission.itemsToPick[0];
         robot.state = 'ORDER_PICKING';
         robot.outboundMission = mission;
@@ -289,17 +292,19 @@
         robot.targetDesc = `${mission.isWaveBatch ? 'Wave Pick' : 'Order Pick'} 1/${mission.totalItems} for ${mission.orderId} at Rack (${currentPick.rack.x},${currentPick.rack.y})`;
         robot.statusBadge = `PICK 0/${mission.totalItems}`;
 
-        const strategyTag = DECENTRALIZED_CBBA_MODE ? 'CBBA Consensus' : 'Hungarian Opt';
-        logTerminal('DISPATCH', 'tag-outbound', `⚡ <strong>${robot.id}</strong> Assigned (${strategyTag}, SLA: <span style="color:${mission.importance.color};font-weight:700;">${mission.importance.shortLabel || mission.importance.code}</span>): ${mission.isWaveBatch ? 'Wave Batch' : 'Order'} <strong>${mission.orderId}</strong> (${mission.totalItems} items, ${mission.totalWeight.toFixed(1)}kg, +${evalRes ? evalRes.margin : '0'}% margin, SoC: <strong>${robot.battery.toFixed(1)}%</strong>). Undocked from charger.${bidReason}`);
+        const strategyTag = (typeof DECENTRALIZED_CBBA_MODE !== 'undefined' && DECENTRALIZED_CBBA_MODE) ? 'CBBA Consensus' : 'Hungarian Opt';
+        if (typeof logTerminal === 'function') {
+           logTerminal('DISPATCH', 'tag-outbound', `⚡ <strong>${robot.id}</strong> Assigned (${strategyTag}, SLA: <span style="color:${mission.importance.color};font-weight:700;">${mission.importance.shortLabel || mission.importance.code}</span>): ${mission.isWaveBatch ? 'Wave Batch' : 'Order'} <strong>${mission.orderId}</strong> (${mission.totalItems} items, ${mission.totalWeight.toFixed(1)}kg, +${evalResult ? evalResult.margin : '0'}% margin, SoC: <strong>${robot.battery.toFixed(1)}%</strong>). Undocked from charger.${bidReason}`);
+        }
 
         if (access) {
           setRobotPath(robot, findPath(robot.gridX, robot.gridY, access.x, access.y));
-          if (robot.path.length === 0) onRobotReachedDestination(robot);
+          if (robot.path.length === 0 && typeof onRobotReachedDestination === 'function') onRobotReachedDestination(robot);
         }
 
       } else if (task.kind === 'RETURN') {
         const mission = task.ref;
-        undockFromCharger(robot.id);
+        if (typeof undockFromCharger === 'function') undockFromCharger(robot.id);
         mission.status = 'ASSIGNED';
         mission.assignedRobotId = robot.id;
         robot.state = 'MOVING_TO_RETURN_DOCK';
@@ -309,8 +314,12 @@
         robot.statusBadge = 'RETURN';
         claimTerminalDestination(robot.id, mission.dockX, mission.dockY);
         setRobotPath(robot, findPath(robot.gridX, robot.gridY, mission.dockX, mission.dockY));
-        logTerminal('DISPATCH', 'tag-inbound', `♻️ <strong>${robot.id}</strong> dispatched for Returns Putback: Dock <strong>${mission.dockId}</strong> (${mission.parcels.length} item(s), ${mission.totalWeight.toFixed(1)}kg)${bidReason}`);
-        if (robot.path.length === 0) onRobotReachedDestination(robot);
+        
+        if (typeof logTerminal === 'function') {
+           logTerminal('DISPATCH', 'tag-inbound', `♻️ <strong>${robot.id}</strong> dispatched for Returns Putback: Dock <strong>${mission.dockId}</strong> (${mission.parcels.length} item(s), ${mission.totalWeight.toFixed(1)}kg)${bidReason}`);
+        }
+        
+        if (robot.path.length === 0 && typeof onRobotReachedDestination === 'function') onRobotReachedDestination(robot);
       }
     }
 
