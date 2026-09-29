@@ -348,3 +348,63 @@ function findPath(sx, sy, gx, gy, avoidCells = null, requestingRobotId = null) {
           }
       }
   }
+  return []; 
+}
+
+const GLOBAL_TRAJECTORIES = new Map(); 
+
+function setRobotPath(robot, newPath) {
+  if (!robot) return;
+  
+  if (!newPath || !Array.isArray(newPath) || newPath.length === 0) {
+    robot.path = [];
+    robot.pathIndex = 0;
+    return;
+  }
+
+  const rawDest = newPath[newPath.length - 1];
+  if (rawDest && typeof rawDest.x === 'number' && typeof rawDest.y === 'number') {
+    robot.currentDestination = { x: rawDest.x, y: rawDest.y };
+  }
+
+  const valid = [];
+  let prevX = robot.gridX !== undefined ? robot.gridX : Math.round(robot.x);
+  let prevY = robot.gridY !== undefined ? robot.gridY : Math.round(robot.y);
+
+  for (let i = 0; i < newPath.length; i++) {
+    const pt = newPath[i];
+    if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number') continue;
+    if (!isWalkable(pt.x, pt.y)) break;
+    
+    const manhattan = Math.abs(pt.x - prevX) + Math.abs(pt.y - prevY);
+    if (manhattan > 1) {
+      const bridge = findPath(prevX, prevY, pt.x, pt.y);
+      if (bridge && bridge.length > 0) {
+        valid.push(...bridge);
+        prevX = pt.x; prevY = pt.y;
+        continue;
+      }
+    }
+    valid.push({ x: pt.x, y: pt.y });
+    prevX = pt.x; prevY = pt.y;
+  }
+  robot.path = valid;
+  robot.pathIndex = 0;
+  robot.pathTimestamp = typeof totalSimSeconds !== 'undefined' ? totalSimSeconds : 0;
+  
+  // Re-broadcast intent immediately so peers see the new path
+  if (typeof zenohMesh !== 'undefined') {
+      const intentTube = robot.path.slice(0, 21).map(pt => [pt.x, pt.y]);
+      zenohMesh.publishHeartbeat(robot.id, robot.x, robot.y, {
+        robot_id: robot.id,
+        seq: (robot.heartbeatSeq || 0) + 1,
+        pose: { x: Number(robot.x.toFixed(2)), y: Number(robot.y.toFixed(2)), theta: Number(robot.heading.toFixed(2)) },
+        pose_confidence: Number((robot.pose_confidence || 1.0).toFixed(2)),
+        intent_tube: intentTube,
+        status_flags: 0,
+        priority: typeof getRobotPriority === 'function' ? getRobotPriority(robot) : 50,
+        path_timestamp: robot.pathTimestamp,
+        active_jam: null
+      });
+  }
+}
