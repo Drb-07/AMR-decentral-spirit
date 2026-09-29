@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AMR Fleet Mission Control - Industrial Warehouse Map</title>
+  <link rel="stylesheet" href="/static/css/base.css">
+  <link rel="stylesheet" href="/static/css/hud.css">
+  <link rel="stylesheet" href="/static/css/panels.css">
+  <link rel="stylesheet" href="/static/css/components.css">
+  <link rel="stylesheet" href="/static/css/problems.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-title">EDGE-AI AMR FLEET MISSION CONTROL</div>
+      <span class="badge">Decentralized Mesh Simulation</span>
+    </div>
+
+    <!-- Main Navigation Tabs -->
+    <div class="nav-tabs">
+      <button class="nav-tab active" id="tab-btn-map" onclick="switchMainTab('map')" title="Warehouse 2D Map & Live Fleet Movement">
+        <span>🗺️</span> <span>Warehouse Map</span>
+      </button>
+      <button class="nav-tab" id="tab-btn-terminal" onclick="switchMainTab('terminal')" title="Live Operations Terminal & Fleet Health Dashboard">
+        <span>⚡</span> <span>Terminal &amp; Bots Health</span>
+        <span class="tab-badge" id="tab-event-badge">0</span>
+      </button>
+      <button class="nav-tab" id="tab-btn-problems" onclick="switchMainTab('problems')" title="Fleet Incidents, Collisions, Deadlocks & BMS Cutoff Dashboard">
+        <span>🚨</span> <span>Bot Problems</span>
+        <span class="tab-badge danger" id="tab-problems-badge">0</span>
+      </button>
+    </div>
+
+    <div class="header-actions">
+      <div class="bot-track-selector-wrapper" title="Select an AMR robot to track & follow across the warehouse">
+        <label for="track-bot-select" class="track-label"><span>🎯</span> Track:</label>
+        <select id="track-bot-select" class="track-select" onchange="onTrackBotSelectChange(this.value)">
+          <option value="">None (Fleet View)</option>
+          <option value="AMR-01">AMR-01</option>
+          <option value="AMR-02">AMR-02</option>
+          <option value="AMR-03">AMR-03</option>
+          <option value="AMR-04">AMR-04</option>
+          <option value="AMR-05">AMR-05</option>
+          <option value="AMR-06">AMR-06</option>
+          <option value="AMR-07">AMR-07</option>
+          <option value="AMR-08">AMR-08</option>
+        </select>
+      </div>
+      <button id="download-logs-btn" class="header-btn download-btn" onclick="openLogsModal()" title="Download Full Fleet & Bot Telemetry Logs">
+        <span>📥</span> <span>Download Logs</span>
+      </button>
+      <button id="speed-btn" class="header-btn speed-btn" onclick="cycleSimulationSpeed()" title="Cycle Simulation Speed (1x, 2x, 5x, 10x)">
+        <span>⏩</span> <span id="speed-label">1x Speed</span>
+      </button>
+      <button id="add-parcels-btn" class="header-btn add-btn" onclick="openBulkModal()" title="Inject N Parcels into 3D Racks">
+        <span>📦</span> <span>+ Add N Parcels</span>
+      </button>
+      <button id="human-toggle-btn" class="header-btn human-toggle-btn" onclick="toggleHumanPresence()" title="Toggle Human Workers on Floor (ISO 3691-4)">
+        <span>👷</span> <span id="human-toggle-label">Humans: ON</span>
+      </button>
+    </div>
+    <div class="status-group">
+      <div class="status-item"><span class="indicator"></span> Active Warehouse Map</div>
+      <div class="status-item">Grid: <strong style="color:#fff; margin-left:4px;">170 &times; 50 (8,500 cells)</strong></div>
+      <div class="status-item">Stations: <strong id="hud-stations-total" style="color:#fff; margin-left:4px;">36 Total</strong></div>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- TAB 1: 2D WAREHOUSE MAP -->
+    <div id="view-map" class="app-view active">
+      <canvas id="viewport"></canvas>
+
+      <div class="hud-card" id="hud-card">
+        <div class="hud-header" onclick="toggleHud()" title="Click to hide/show details">
+          <div class="hud-title">Warehouse Topology</div>
+          <button class="hud-toggle-btn" id="hud-toggle-btn" aria-label="Toggle Panel">
+            <span id="hud-toggle-icon">&minus;</span>
+          </button>
+        </div>
+        <div class="hud-body" id="hud-body" style="margin-top:10px;">
+          <div class="hud-stat"><span>Dimensions:</span><span class="hud-val">170 x 50 cells (Multi-Zone)</span></div>
+          <div class="hud-stat"><span>Rack Memory (3D):</span><span class="hud-val" style="color:#38bdf8">3,024 Racks &times; 5 Tiers</span></div>
+          <div class="hud-stat"><span>Stored Inventory:</span><span class="hud-val" id="hud-stored-count" style="color:#22c55e">0 / 15,120 (0.0%)</span></div>
+          <div class="hud-stat"><span>Inbound Load:</span><span class="hud-val" id="hud-inbound-waiting" style="color:var(--pickup)">0 Parcels Queued</span></div>
+          <div class="hud-stat"><span>Outbound Orders:</span><span class="hud-val" id="hud-outbound-transit" style="color:var(--dropoff)">0 Awaiting Deposit</span></div>
+          <div class="hud-stat"><span>AMR Fleet:</span><span class="hud-val" id="hud-fleet-status" style="color:#38bdf8">8 Active (8 Charging)</span></div>
+          <div class="hud-stat"><span>Collision Status:</span><span class="hud-val" id="hud-collision-status" style="color:#22c55e">0 Collisions (Active)</span></div>
+          <div class="hud-stat"><span>Traffic Events:</span><span class="hud-val" id="hud-traffic-events" style="color:#facc15">0 Yields | 0 Overtakes | 0 Reroutes</span></div>
+          <div class="hud-stat"><span>Charging Bays:</span><span class="hud-val" style="color:var(--charging)">16 Fast Chargers</span></div>
+          <div class="hud-stat"><span>Transit Bridge:</span><span class="hud-val" id="hud-bridge-traffic" style="color:#f59e0b">0 Bots (0.0s avg)</span></div>
+          <div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); font-size:10px; color:#94a3b8; font-weight:700; text-transform:uppercase; letter-spacing:0.5px;">Throughput &amp; SLA KPIs</div>
+          <div class="hud-stat"><span>Throughput Rate:</span><span class="hud-val" id="hud-tp-orders" style="color:#38bdf8">0.0 orders/hr</span></div>
+          <div class="hud-stat"><span>Avg Cycle Time:</span><span class="hud-val" id="hud-tp-cycle" style="color:#a78bfa">0.0s (AR: 40-90s)</span></div>
+          <div class="hud-stat"><span>Pick Rate / Bot:</span><span class="hud-val" id="hud-tp-picks" style="color:#34d399">0.0 picks/hr/bot</span></div>
+          <div class="hud-stat"><span>Dock Utilization:</span><span class="hud-val" id="hud-tp-dock" style="color:#fbbf24">0.0% (Inbound)</span></div>
+          <div class="hud-stat"><span>SLA Compliance:</span><span class="hud-val" id="hud-tp-vip" style="color:#22c55e">100.0% (VIP: 100%)</span></div>
+          <div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); font-size:10px; color:#a3e635; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; display:flex; justify-content:space-between; align-items:center;">
+            <span>Human-Robot Hybrid Ops</span>
+            <span id="hud-human-badge-pill" style="cursor:pointer; background:rgba(163,230,53,0.2); border:1px solid #a3e635; color:#a3e635; padding:1px 6px; border-radius:10px; font-size:9px;" onclick="toggleHumanPresence()" title="Click to toggle human presence">ACTIVE (CLICK TO TOGGLE)</span>
+          </div>
+          <div class="hud-stat"><span>Floor Workers:</span><span class="hud-val" id="hud-workers-count" style="color:#a3e635">4 Active 👷</span></div>
+          <div class="hud-stat"><span>ISO 3691-4 Safety:</span><span class="hud-val" id="hud-safety-interventions" style="color:#38bdf8">0 Stops | 0 Slowdowns</span></div>
+          <div class="hud-stat"><span>Pack Backpressure:</span><span class="hud-val" id="hud-packer-backpressure" style="color:#f59e0b">0 Queued (0 Stalls)</span></div>
+          <div class="hud-stat"><span>Pack Utilization:</span><span class="hud-val" id="hud-packer-utilization" style="color:#34d399">0.0% (5.0 ppm)</span></div>
+          <div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); font-size:10px; color:#38bdf8; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; display:flex; justify-content:space-between; align-items:center;">
+            <span>ABC Storage &amp; Slotting</span>
+            <span id="hud-slot-optimize-pill" style="cursor:pointer; background:rgba(56,189,248,0.2); border:1px solid #38bdf8; color:#38bdf8; padding:1px 6px; border-radius:10px; font-size:9px;" onclick="runBackgroundSlottingOptimization(5)" title="Click to trigger background re-slotting optimization">OPTIMIZE</span>
+          </div>
+          <div class="hud-stat"><span>Slotting Policy:</span><span class="hud-val" id="hud-slot-policy" style="color:#38bdf8">ABC / Velocity</span></div>
+          <div class="hud-stat"><span>Zone Compliance:</span><span class="hud-val" id="hud-slot-compliance" style="color:#22c55e">100.0% Optimal</span></div>
+          <div class="hud-stat"><span>Avg Pick Travel:</span><span class="hud-val" id="hud-slot-pick-dist" style="color:#a78bfa">0.0c (~0.0m)</span></div>
+          <div class="hud-stat"><span>Travel Dist Saved:</span><span class="hud-val" id="hud-slot-dist-saved" style="color:#34d399">+0.0% vs Random</span></div>
+          <div class="hud-stat"><span>Re-Slot Moves:</span><span class="hud-val" id="hud-slot-reslot-moves" style="color:#fbbf24">0 Completed</span></div>
+          <div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); font-size:10px; color:#f87171; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; display:flex; justify-content:space-between; align-items:center;">
+            <span>Maintenance &amp; Charging Pool</span>
+            <span id="hud-maint-service-pill" style="cursor:pointer; background:rgba(239,68,68,0.2); border:1px solid #ef4444; color:#ef4444; padding:1px 6px; border-radius:10px; font-size:9px;" onclick="serviceAllMaintenance()" title="Service all faulted AMRs and chargers">SERVICE ALL</span>
+          </div>
+          <div class="hud-stat"><span>Fleet Health:</span><span class="hud-val" id="hud-maint-fleet-health" style="color:#22c55e">8 / 8 Active</span></div>
+          <div class="hud-stat"><span>Faulted AMRs:</span><span class="hud-val" id="hud-maint-faulted-bots" style="color:#38bdf8">0 In Maintenance</span></div>
+          <div class="hud-stat"><span>Charger Pool:</span><span class="hud-val" id="hud-maint-charger-health" style="color:#22c55e">8 / 8 Operational</span></div>
+          <div class="hud-stat"><span>Charger Queue:</span><span class="hud-val" id="hud-maint-charger-queue" style="color:#f59e0b">0 Waiting (0.0s avg)</span></div>
+          <div class="hud-stat"><span>Tasks Reassigned:</span><span class="hud-val" id="hud-maint-tasks-reassigned" style="color:#a78bfa">0 Reassigned</span></div>
+          <div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); font-size:10px; color:#34d399; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; display:flex; justify-content:space-between; align-items:center;">
+            <span>♻️ Returns &amp; Cancellations</span>
+            <div style="display:flex; gap:4px;">
+              <span id="hud-cancel-trigger-pill" style="cursor:pointer; background:rgba(248,113,113,0.2); border:1px solid #f87171; color:#f87171; padding:1px 6px; border-radius:10px; font-size:9px;" onclick="cancelActiveOrder()" title="Cancel an active outbound order">CANCEL</span>
+              <span id="hud-returns-trigger-pill" style="cursor:pointer; background:rgba(52,211,153,0.2); border:1px solid #34d399; color:#34d399; padding:1px 6px; border-radius:10px; font-size:9px;" onclick="triggerReturnShipment()" title="Inject a customer return shipment">+ RETURN</span>
+            </div>
+          </div>
+          <div class="hud-stat"><span>Returns Queued:</span><span class="hud-val" id="hud-returns-queued" style="color:#34d399">0 Missions</span></div>
+          <div class="hud-stat"><span>Putback Stowed:</span><span class="hud-val" id="hud-returns-stowed" style="color:#a3e635">0 Items</span></div>
+          <div class="hud-stat"><span>Orders Cancelled:</span><span class="hud-val" id="hud-returns-cancelled" style="color:#f87171">0 Cancelled (0 Items Restored)</span></div>
+          <div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); font-size:10px; color:#fbbf24; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; display:flex; justify-content:space-between; align-items:center;">
+            <span>🏭 Kiva / Pod-to-Picker Mode</span>
+            <span id="hud-kiva-badge-pill" style="cursor:pointer; background:rgba(100,116,139,0.2); border:1px solid #64748b; color:#64748b; padding:1px 6px; border-radius:10px; font-size:9px;" onclick="toggleKivaMode()" title="Toggle Kiva/Pod-to-Picker operating mode">OFF (CLICK TO ENABLE)</span>
+          </div>
+          <div class="hud-stat"><span>Kiva Mode:</span><span class="hud-val" id="hud-kiva-status" style="color:#64748b">DISABLED</span></div>
+          <div class="hud-stat"><span>Mobile Pods:</span><span class="hud-val" id="hud-kiva-pods" style="color:#fbbf24">0 Pods</span></div>
+          <div class="hud-stat"><span>Pods Delivered:</span><span class="hud-val" id="hud-kiva-delivered" style="color:#fbbf24">0 Deliveries | 0 Picks</span></div>
+          <div style="margin-top:10px; padding-top:8px; border-top:1px solid var(--border); font-size:11px; color:var(--text-muted)">
+            Cursor Pos: <strong id="cursor-coords" style="color:var(--accent)">-</strong>
+          </div>
+          <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="header-btn add-btn" style="flex:1; justify-content:center; padding:5px 8px; font-size:11px;" onclick="openBulkModal()">📦 + Add Parcels</button>
+            <button class="header-btn speed-btn" id="hud-speed-btn" style="padding:5px 8px; font-size:11px;" onclick="cycleSimulationSpeed()">⏩ 1x</button>
+            <button class="header-btn human-toggle-btn" id="hud-human-btn" style="padding:5px 8px; font-size:11px;" onclick="toggleHumanPresence()" title="Toggle Human Workers on Floor">👷 ON</button>
+            <button class="header-btn" style="padding:5px 8px; font-size:11px; background:#1e293b; color:#38bdf8; border:1px solid #38bdf8;" onclick="runBackgroundSlottingOptimization(5)" title="Trigger Re-slotting &amp; Consolidation">🔄 Re-Slot</button>
+            <button class="header-btn" style="padding:5px 8px; font-size:11px; background:#1e293b; color:#ef4444; border:1px solid #ef4444;" onclick="triggerRandomFaultMenu()" title="Inject Random Robot or Charger Fault">💥 Fault</button>
+            <button class="header-btn" style="padding:5px 8px; font-size:11px; background:#1e293b; color:#22c55e; border:1px solid #22c55e;" onclick="serviceAllMaintenance()" title="Repair All Robots and Chargers">🛠️ Repair</button>
+            <button class="header-btn" style="padding:5px 8px; font-size:11px; background:#1e293b; color:#34d399; border:1px solid #34d399;" onclick="triggerReturnShipment()" title="Trigger a customer return shipment">♻️ Return</button>
+            <button class="header-btn" style="padding:5px 8px; font-size:11px; background:#1e293b; color:#fbbf24; border:1px solid #fbbf24;" onclick="toggleKivaMode()" title="Toggle Kiva/Pod-to-Picker Mode">🏭 Kiva</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- LIVE BOT TRACKING INSPECTOR HUD CARD -->
+      <div id="bot-tracking-hud" class="bot-tracking-hud" style="display:none;">
+        <div class="tracking-hud-header">
+          <div class="tracking-hud-title-wrap">
+            <span class="tracking-radar-dot"></span>
+            <span class="tracking-title" id="track-hud-robot-id">AMR-01</span>
+            <span class="tracking-badge" id="track-hud-state-badge">STANDBY</span>
+          </div>
+          <div class="tracking-hud-controls">
+            <button class="track-ctrl-icon-btn" onclick="cycleTrackedRobot(-1)" title="Previous Bot (←)">◀</button>
+            <button class="track-ctrl-icon-btn" onclick="cycleTrackedRobot(1)" title="Next Bot (→)">▶</button>
+            <button class="track-ctrl-icon-btn active" id="track-cam-toggle-btn" onclick="toggleTrackCameraFollow()" title="Toggle Camera Auto-Follow (F)">🎥 Cam</button>
+            <button class="track-ctrl-close-btn" onclick="stopTrackingBot()" title="Stop Tracking (Esc)">✕</button>
+          </div>
+        </div>
+
+        <div class="tracking-hud-body">
+          <div class="track-metrics-grid">
+            <div class="track-metric-cell">
+              <span class="track-metric-lbl">Battery SoC</span>
+              <div class="track-metric-val" id="track-hud-battery">100.0%</div>
+              <div class="track-batt-bar"><div class="track-batt-fill" id="track-hud-batt-fill" style="width:100%;"></div></div>
+            </div>
+            <div class="track-metric-cell">
+              <span class="track-metric-lbl">Speed & Load</span>
+              <div class="track-metric-val" id="track-hud-speed">4.2 cells/s</div>
+              <div class="track-metric-sub" id="track-hud-load">0.0 kg (100% throttle)</div>
+            </div>
+            <div class="track-metric-cell">
+              <span class="track-metric-lbl">Position (X, Y)</span>
+              <div class="track-metric-val" id="track-hud-coords">X: 12, Y: 24</div>
+              <div class="track-metric-sub" id="track-hud-heading">Heading: 90° (E)</div>
+            </div>
+            <div class="track-metric-cell">
+              <span class="track-metric-lbl">BMS Power Draw</span>
+              <div class="track-metric-val" id="track-hud-power">165 W</div>
+              <div class="track-metric-sub" id="track-hud-charge-phase">Discharging</div>
+            </div>
+          </div>
+
+          <div class="track-mission-box">
+            <div class="track-mission-label">Target & Assignment:</div>
+            <div class="track-mission-desc" id="track-hud-target-desc">Dock P-01 (Inbound Load)</div>
+            <div class="track-mission-sub" id="track-hud-sla">SLA: Standard | Nearest Charger: CH-01 (14 cells)</div>
+          </div>
+
+          <div class="track-mission-box" id="track-hud-perception-box" style="border-left:3px solid #06b6d4;">
+            <div class="track-mission-label" style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="color:#06b6d4;">📡 Onboard Perception Horizon:</span>
+              <span id="track-hud-perception-status" style="font-size:10px; color:#22c55e; font-weight:700;">CLEAR</span>
+            </div>
+            <div class="track-mission-desc" id="track-hud-perception-spec" style="font-size:11px; color:#cbd5e1;">2D Safety LiDAR: 6.0c (2.1m) | 220° FOV | 80ms Latency</div>
+            <div class="track-mission-sub" id="track-hud-perception-tracked" style="color:#94a3b8; font-size:10px;">Tracked Local Obstacles: None in safety zone</div>
+          </div>
+
+          <div class="track-cargo-box" id="track-hud-cargo-box">
+            <div class="track-cargo-header">
+              <span id="track-hud-cargo-title">📦 Cargo Manifest:</span>
+              <span class="track-cargo-count" id="track-hud-cargo-count">Empty</span>
+            </div>
+            <div class="track-cargo-list" id="track-hud-cargo-list">No parcels loaded</div>
+          </div>
+
+          <div class="track-actions-row">
+            <button class="track-act-btn recall-btn" onclick="recallTrackedBotToCharger()" title="Recall bot to nearest charging port">⚡ Recall to Charger</button>
+            <button class="track-act-btn inspect-btn" onclick="inspectTrackedBotInHealth()" title="View in Bot Health Matrix">📊 Health Specs</button>
+            <button class="track-act-btn log-bot-btn" onclick="downloadCurrentTrackedBotLog()" title="Download complete operational log of this robot">📥 Export Bot Log</button>
+            <button class="track-act-btn reset-cam-btn" onclick="centerOnTrackedBot()" title="Center camera on bot">🎯 Center Cam</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-item"><div class="legend-box" style="background:#151821; border:1px solid #282d37;"></div> 3D Rack (5 Tiers)</div>
+        <div class="legend-item"><div class="legend-box" style="background:#06b6d4;"></div> Inbound (Blue: Ready / <span style="color:#facc15; font-weight:700; margin-left:3px;">Yellow: Holding Load</span>)</div>
+        <div class="legend-item"><div class="legend-box" style="background:#f97316;"></div> Outbound (Orange: Idle / <span style="color:#facc15; font-weight:700; margin-left:3px;">Yellow: Awaiting Deposit</span>)</div>
+        <div class="legend-item"><div class="legend-box" style="background:#22c55e; border:1px solid #86efac; box-shadow:0 0 6px rgba(34,197,94,0.6)"></div> Charging Bay (C)</div>
+        <div class="legend-item"><div class="legend-box" style="background:#1e293b; border-radius:50%; border:2px solid #38bdf8; box-shadow:0 0 6px rgba(56,189,248,0.6);"></div> AMR Fleet (8 Bots)</div>
+        <div class="legend-item"><div class="legend-box" style="background:#0f172a; border:2px solid #38bdf8; box-shadow:0 0 6px #38bdf8; display:flex; align-items:center; justify-content:center; font-size:8px;">🎯</div> Tracked Bot (Follow Cam)</div>
+        <div class="legend-item"><div class="legend-box" style="background:#b45309; border:1px solid #f59e0b; border-radius:3px;"></div> Yielding / Waiting</div>
+        <div class="legend-item"><div class="legend-box" style="background:#0284c7; border:1px solid #38bdf8; border-radius:3px;"></div> Overtaking</div>
+        <div class="legend-item"><div class="legend-box" style="background:#7e22ce; border:1px solid #a855f7; border-radius:3px;"></div> Dynamic Reroute</div>
+        <div class="legend-item"><div class="legend-box" style="background:#111827; border:2px dashed #38bdf8;"></div> Rack: Bot Placing Parcel (Dotted Blue)</div>
+        <div class="legend-item"><div class="legend-box" style="background:#111827; border:2px dashed #ef4444;"></div> Rack: Bot Picking Parcel (Dotted Red)</div>
+        <div class="legend-item"><div class="legend-box" style="background:#b91c1c; border:1px solid #ef4444; border-radius:3px;"></div> Low Battery (&le;25% SoC)</div>
+        <div class="legend-item"><div class="legend-box" style="background:#14532d; border:1px solid #22c55e; border-radius:3px;"></div> ⚡ CC/CV Fast Charging</div>
+      </div>
+
+      <div class="controls">
+        <button class="ctrl-btn" id="pause-btn" onclick="togglePause()" title="Pause/Resume Simulation" style="font-size:14px;">⏸️</button>
+        <button class="ctrl-btn" id="ctrl-speed-btn" onclick="cycleSimulationSpeed()" title="Cycle Simulation Speed (1x, 2x, 5x, 10x)" style="font-weight:700; font-size:12px;">1x</button>
+        <button class="ctrl-btn" onclick="switchMainTab('terminal')" title="Switch to Terminal &amp; Bots Health Tab">&gt;_</button>
+        <button class="ctrl-btn" onclick="toggleHud()" title="Toggle Warehouse Info Panel">ℹ</button>
+        <button class="ctrl-btn" onclick="zoom(1.2)" title="Zoom In">+</button>
+        <button class="ctrl-btn" onclick="zoom(0.8)" title="Zoom Out">&minus;</button>
+        <button class="ctrl-btn" onclick="resetView()" title="Fit to Screen">&#x21bb;</button>
+      </div>
+
+      <!-- PHASE 12: JUDGE CHAOS PANEL -->
+      <div class="hud-card" id="chaos-panel-card" style="top: auto; bottom: 24px; left: 350px; padding: 10px 14px;">
+        <div class="hud-header" style="margin-bottom:8px;">
+          <div class="hud-title" style="color:#ef4444;">🔥 Judge Chaos Panel (Sec 6.4)</div>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button class="header-btn" style="background:rgba(239,68,68,0.15); color:#fca5a5; border-color:#ef4444;" onclick="chaosKillRobot('AMR-02')">☠️ Kill AMR-02</button>
+          <button class="header-btn" style="background:rgba(245,158,11,0.15); color:#fde047; border-color:#f59e0b;" onclick="chaosBlockAisle()">🚧 Block Bridge</button>
+          <button class="header-btn" style="background:rgba(168,85,247,0.15); color:#d8b4fe; border-color:#a855f7;" onclick="chaosPacketLoss(30)">📉 30% Pkt Loss</button>
+          <button class="header-btn" style="background:rgba(34,197,94,0.15); color:#86efac; border-color:#22c55e;" onclick="chaosPacketLoss(0)">📶 Restore Net</button>
+        </div>
+      </div>
+
+      <div id="cell-tooltip"></div>
+    </div>
+
+    <!-- TAB 2: OPERATIONS TERMINAL & BOTS HEALTH DASHBOARD -->
+    <div id="view-terminal-health" class="app-view">
+      <div class="th-container">
+        <!-- Top Toolbar with Sub-view Mode Switcher & Fleet KPIs -->
+        <div class="th-top-bar">
+          <div class="th-view-modes">
+            <span class="th-label">VIEW MODE:</span>
+            <button class="th-mode-btn active" id="btn-mode-split" onclick="setThLayoutMode('split')" title="View Bots Health and Terminal Side-by-Side">
+              <span>⚡ Split View</span>
+            </button>
+            <button class="th-mode-btn" id="btn-mode-bots" onclick="setThLayoutMode('bots')" title="Maximize Bots Health Telemetry">
+              <span>🤖 Bots Health Only</span>
+            </button>
+            <button class="th-mode-btn" id="btn-mode-term" onclick="setThLayoutMode('term')" title="Maximize Terminal Log Stream">
+              <span>💻 Terminal Only</span>
+            </button>
+          </div>
+
+          <div class="th-kpi-summary">
+            <div class="th-kpi-pill"><span class="kpi-dot green"></span> Fleet: <strong id="kpi-fleet-status">8 Online</strong></div>
+            <div class="th-kpi-pill">🔋 Avg SoC: <strong id="kpi-avg-battery" style="color:#22c55e;">85%</strong></div>
+            <div class="th-kpi-pill">⚡ Net Power: <strong id="kpi-net-power" style="color:#38bdf8;">+22.4 kW</strong></div>
+            <div class="th-kpi-pill">📦 Freight: <strong id="kpi-total-freight" style="color:#facc15;">0.0 kg</strong></div>
+            <div class="th-kpi-pill">⚡ Chargers: <strong id="kpi-chargers-avail" style="color:#4ade80;">8/8 Available</strong></div>
+            <div class="th-kpi-pill">🛡️ Collisions: <strong style="color:#22c55e;">0 (Safe)</strong></div>
+          </div>
+        </div>
+
+        <!-- Main Body: Panes Container -->
+        <div class="th-panes mode-split" id="th-panes">
+          <!-- PANE A: BOTS HEALTH DASHBOARD -->
+          <div class="th-pane th-pane-bots" id="pane-bots">
+            <div class="pane-header">
+              <div class="pane-title">
+                <span>🤖</span> AMR FLEET HEALTH &amp; BMS TELEMETRY
+                <span class="pane-badge" id="bots-status-summary">8 Bots Monitored</span>
+              </div>
+              <div class="pane-actions">
+                <button class="term-btn" onclick="openLogsModal()" title="Export Fleet Telemetry Logs">📥 Export Logs</button>
+                <button class="term-btn" onclick="recallAllIdleBots()" title="Recall all idle floor robots to their nearest available fast chargers">⚡ Dock All Idle (Nearest)</button>
+                <button class="term-btn" onclick="switchMainTab('map')" title="Jump to 2D Map View">🗺️ View on Map</button>
+              </div>
+            </div>
+            
+            <div class="bots-grid" id="bots-cards-grid">
+              <!-- Dynamically populated 8 AMR Health Cards -->
+            </div>
+          </div>
+
+          <!-- PANE B: OPERATIONS TERMINAL STREAM -->
+          <div class="th-pane th-pane-terminal" id="pane-terminal">
+            <div class="pane-header">
+              <div class="pane-title">
+                <span>&gt;_</span> PARCEL &amp; FLEET EVENT STREAM
+                <span class="terminal-badge" id="term-event-count">0</span>
+              </div>
+              <div class="terminal-controls">
+                <div class="log-filter-group">
+                  <button class="filter-pill active" data-filter="ALL" onclick="setLogFilter('ALL', this)">All</button>
+                  <button class="filter-pill" data-filter="INBOUND" onclick="setLogFilter('INBOUND', this)">Inbound</button>
+                  <button class="filter-pill" data-filter="OUTBOUND" onclick="setLogFilter('OUTBOUND', this)">Outbound</button>
+                  <button class="filter-pill" data-filter="TRAFFIC" onclick="setLogFilter('TRAFFIC', this)">Traffic</button>
+                  <button class="filter-pill" data-filter="BMS" onclick="setLogFilter('BMS', this)">BMS</button>
+                </div>
+                <button class="term-btn" onclick="openLogsModal()" title="Download Fleet Logs">📥 Export Logs</button>
+                <button class="term-btn" onclick="clearTerminal()" title="Clear Terminal Logs">Clear</button>
+                <button class="term-btn" id="term-autoscroll-btn" onclick="toggleAutoScroll()" title="Toggle Auto-Scroll">Scroll: ON</button>
+              </div>
+            </div>
+
+            <div class="terminal-body" id="terminal-body">
+              <!-- Live event rows go here -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: BOT PROBLEMS & FLEET DIAGNOSTICS DASHBOARD -->
+    <div id="view-problems" class="app-view">
+      <div class="prob-container">
+        <!-- Top Toolbar with Problem KPIs & Fleet Controls -->
+        <div class="prob-top-bar">
+          <div class="prob-kpi-summary">
+            <div class="prob-kpi-card" id="kpi-card-collisions">
+              <div class="prob-kpi-icon">💥</div>
+              <div class="prob-kpi-info">
+                <span class="prob-kpi-lbl">Collisions &amp; Conflicts</span>
+                <div class="prob-kpi-val" id="prob-kpi-collisions" style="color:#ef4444;">0</div>
+              </div>
+            </div>
+            <div class="prob-kpi-card" id="kpi-card-out-of-charge">
+              <div class="prob-kpi-icon">🪫</div>
+              <div class="prob-kpi-info">
+                <span class="prob-kpi-lbl">Battery Floor (≤10%)</span>
+                <div class="prob-kpi-val" id="prob-kpi-out-of-charge" style="color:#f87171;">0</div>
+              </div>
+            </div>
+            <div class="prob-kpi-card" id="kpi-card-deadlocks">
+              <div class="prob-kpi-icon">🛑</div>
+              <div class="prob-kpi-info">
+                <span class="prob-kpi-lbl">Gridlocks &amp; Stalls (&gt;2.5s)</span>
+                <div class="prob-kpi-val" id="prob-kpi-deadlocks" style="color:#f59e0b;">0</div>
+              </div>
+            </div>
+            <div class="prob-kpi-card" id="kpi-card-bms-deficits">
+              <div class="prob-kpi-icon">⚠️</div>
+              <div class="prob-kpi-info">
+                <span class="prob-kpi-lbl">BMS Energy Deficits</span>
+                <div class="prob-kpi-val" id="prob-kpi-bms-deficits" style="color:#38bdf8;">0</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="prob-global-actions">
+            <button class="prob-action-btn rescue-all" onclick="towAllStrandedBots()" title="Emergency dispatch rescue tug to tow all low-SoC bots to fast chargers">
+              <span>⚡ Tow Stranded Bots</span>
+            </button>
+            <button class="prob-action-btn unblock-all" onclick="breakAllDeadlocks()" title="Force nudge and reroute all waiting or deadlocked bots">
+              <span>🔄 Break All Gridlocks</span>
+            </button>
+            <button class="prob-action-btn clear-resolved" onclick="clearResolvedIncidents()" title="Clear all resolved problem logs">
+              <span>🧹 Clear Resolved</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Filter Subbar -->
+        <div class="prob-sub-bar">
+          <div class="prob-filter-group">
+            <span class="prob-filter-lbl">FILTER PROBLEMS:</span>
+            <button class="prob-filter-pill active" data-filter="ALL" onclick="setProblemFilter('ALL', this)">All Incidents</button>
+            <button class="prob-filter-pill" data-filter="COLLISION" onclick="setProblemFilter('COLLISION', this)">💥 Collisions</button>
+            <button class="prob-filter-pill" data-filter="OUT_OF_CHARGE" onclick="setProblemFilter('OUT_OF_CHARGE', this)">🪫 Out of Charge</button>
+            <button class="prob-filter-pill" data-filter="DEADLOCK" onclick="setProblemFilter('DEADLOCK', this)">🛑 Gridlocks</button>
+            <button class="prob-filter-pill" data-filter="BMS_DEFICIT" onclick="setProblemFilter('BMS_DEFICIT', this)">⚠️ BMS Deficits</button>
+          </div>
+          <div class="prob-status-legend">
+            <span class="legend-badge"><span class="badge-dot pulse-red"></span> Active Problem</span>
+            <span class="legend-badge"><span class="badge-dot green"></span> Resolved</span>
+          </div>
+        </div>
+
+        <!-- Main Body: Two Panes (Live Feed & Fleet Diagnostics Matrix) -->
+        <div class="prob-panes">
+          <!-- PANE 1: LIVE INCIDENTS LOG & ACTIONS (58%) -->
+          <div class="prob-pane prob-pane-feed">
+            <div class="pane-header">
+              <div class="pane-title">
+                <span>🚨</span> LIVE FLEET INCIDENT FEED &amp; REMEDIATION
+                <span class="pane-badge" id="prob-incident-count">0 Incidents</span>
+              </div>
+              <div class="pane-actions">
+                <span style="font-size:11px; color:var(--text-muted);">Real-time collision, UVLO &amp; traffic diagnostics</span>
+              </div>
+            </div>
+            <div class="prob-feed-body" id="prob-feed-list">
+              <!-- Dynamically rendered incident cards -->
+            </div>
+          </div>
+
+          <!-- PANE 2: FLEET DIAGNOSTICS & TELEMETRY MATRIX (42%) -->
+          <div class="prob-pane prob-pane-matrix">
+            <div class="pane-header">
+              <div class="pane-title">
+                <span>🤖</span> 8-AMR HEALTH &amp; IMMOBILIZATION MATRIX
+                <span class="pane-badge" id="prob-matrix-summary">8 Monitored</span>
+              </div>
+              <div class="pane-actions">
+                <button class="term-btn" onclick="switchMainTab('map')" title="View on 2D Warehouse Map">🗺️ Map</button>
+              </div>
+            </div>
+            <div class="prob-matrix-body" id="prob-matrix-grid">
+              <!-- 8 compact AMR diagnostic rows -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="cell-tooltip"></div>
+
+    <!-- Bulk Parcel Modal -->
+    <div class="modal-overlay" id="bulk-modal" onclick="closeBulkModal(event)">
+      <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="modal-title"><span>📦</span> Ingest Parcels to 3D Racks</div>
+          <button class="modal-close-btn" onclick="closeBulkModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="color:var(--text-muted); font-size:12px; margin-bottom:12px; line-height:1.4;">
+            Directly populate $N$ parcels into available 3D storage slots (Levels 1 to 5). Maximum warehouse capacity: <strong style="color:#fff;">15,120 slots</strong>.
+          </p>
+          <div class="input-group">
+            <label for="bulk-input-val">Number of Parcels to Ingest:</label>
+            <input type="number" id="bulk-input-val" value="50" min="1" max="15120" onkeydown="if(event.key==='Enter') submitBulkIngest()" />
+          </div>
+          <div class="quick-presets">
+            <span class="preset-label">Quick Presets:</span>
+            <button type="button" class="preset-btn" onclick="setPresetN(10)">+10</button>
+            <button type="button" class="preset-btn" onclick="setPresetN(50)">+50</button>
+            <button type="button" class="preset-btn" onclick="setPresetN(200)">+200</button>
+            <button type="button" class="preset-btn" onclick="setPresetN(1000)">+1000</button>
+            <button type="button" class="preset-btn" onclick="fillCapacity(0.5)">50% Full</button>
+            <button type="button" class="preset-btn" onclick="fillCapacity(1.0)">100% Full</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="modal-btn cancel" onclick="closeBulkModal()">Cancel</button>
+          <button class="modal-btn confirm" onclick="submitBulkIngest()">📥 Inject Parcels</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Comprehensive Bot & Fleet Telemetry Logs Modal -->
+    <div class="modal-overlay" id="logs-modal" onclick="closeLogsModal(event)">
+      <div class="modal-box modal-box-wide" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="modal-title"><span>📥</span> AMR Fleet &amp; Bot Telemetry Export</div>
+          <button class="modal-close-btn" onclick="closeLogsModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="color:var(--text-muted); font-size:12px; margin-bottom:14px; line-height:1.45;">
+            Download deep-dive operational flight recorder telemetry for all AMRs. Logs include <strong>exact time spent waiting in jams</strong>, right-of-way yields, deadlock back-ups, overtaking maneuvers, BMS power curves, distance, and mission lifecycles.
+          </p>
+
+          <!-- Fleet Overview KPI Strip -->
+          <div class="logs-kpi-grid">
+            <div class="logs-kpi-item">
+              <span class="logs-kpi-label">Simulation Time</span>
+              <span class="logs-kpi-val" id="modal-log-sim-time">0m 0s</span>
+            </div>
+            <div class="logs-kpi-item">
+              <span class="logs-kpi-label">Active Moving Time</span>
+              <span class="logs-kpi-val" id="modal-log-moving-time" style="color:#38bdf8;">0.0s</span>
+            </div>
+            <div class="logs-kpi-item">
+              <span class="logs-kpi-label">Jam &amp; Wait Delay</span>
+              <span class="logs-kpi-val" id="modal-log-jam-time" style="color:#f59e0b;">0.0s (0%)</span>
+            </div>
+            <div class="logs-kpi-item">
+              <span class="logs-kpi-label">Traffic Delays</span>
+              <span class="logs-kpi-val" id="modal-log-jams-count" style="color:#fde047;">0</span>
+            </div>
+            <div class="logs-kpi-item">
+              <span class="logs-kpi-label">Freight Handled</span>
+              <span class="logs-kpi-val" id="modal-log-freight" style="color:#22c55e;">0 pkgs</span>
+            </div>
+            <div class="logs-kpi-item">
+              <span class="logs-kpi-label">Total Distance</span>
+              <span class="logs-kpi-val" id="modal-log-distance" style="color:#c084fc;">0 cells</span>
+            </div>
+          </div>
+
+          <!-- Download Action Cards Grid -->
+          <div class="logs-options-grid">
+            <!-- Option 1: Full Fleet JSON -->
+            <div class="log-card">
+              <div>
+                <div class="log-card-header">
+                  <span class="log-card-icon">📄</span>
+                  <div>
+                    <div class="log-card-title">Full Fleet Telemetry (JSON)</div>
+                    <span style="font-size:10px; color:#38bdf8; font-weight:600;">Complete Flight Recorder</span>
+                  </div>
+                </div>
+                <div class="log-card-desc" style="margin-top:6px;">
+                  All 8 bots with full event history, chronological audit trail, state machine transitions, individual jam episodes with start/end timestamps, BMS power draws, and mission histories.
+                </div>
+              </div>
+              <div class="log-card-actions">
+                <button class="log-card-btn primary" onclick="downloadFleetJson()">
+                  <span>📥</span> Download Full JSON
+                </button>
+              </div>
+            </div>
+
+            <!-- Option 2: Fleet Performance Summary CSV -->
+            <div class="log-card">
+              <div>
+                <div class="log-card-header">
+                  <span class="log-card-icon">📊</span>
+                  <div>
+                    <div class="log-card-title">Fleet Performance Summary (CSV)</div>
+                    <span style="font-size:10px; color:#4ade80; font-weight:600;">Spreadsheet &amp; Pandas Ready</span>
+                  </div>
+                </div>
+                <div class="log-card-desc" style="margin-top:6px;">
+                  Tabular overview per bot: Active Moving Time, Jam Wait Time, Jam Delay %, Charging Time, Idle Time, Total Distance, Average Speed, Energy Consumed, and Operational Availability.
+                </div>
+              </div>
+              <div class="log-card-actions">
+                <button class="log-card-btn" onclick="downloadPerformanceCsv()">
+                  <span>📊</span> Download Summary CSV
+                </button>
+              </div>
+            </div>
+
+            <!-- Option 3: Traffic Jams & Delays CSV -->
+            <div class="log-card">
+              <div>
+                <div class="log-card-header">
+                  <span class="log-card-icon">🛑</span>
+                  <div>
+                    <div class="log-card-title">Traffic Jams &amp; Delays (CSV)</div>
+                    <span style="font-size:10px; color:#f59e0b; font-weight:600;">Granular Wait Time Audit</span>
+                  </div>
+                </div>
+                <div class="log-card-desc" style="margin-top:6px;">
+                  Every single traffic wait event: exact duration (seconds), tile location (X, Y), conflicting bot ID, SoC priority comparison, reason (head-on, trailing, AEB), and resolution mechanism.
+                </div>
+              </div>
+              <div class="log-card-actions">
+                <button class="log-card-btn" onclick="downloadJamsCsv()">
+                  <span>🛑</span> Download Jams CSV
+                </button>
+              </div>
+            </div>
+
+            <!-- Option 4: Individual Bot Deep-Dive -->
+            <div class="log-card">
+              <div>
+                <div class="log-card-header">
+                  <span class="log-card-icon">🤖</span>
+                  <div>
+                    <div class="log-card-title">Individual Bot Log Export</div>
+                    <span style="font-size:10px; color:#a855f7; font-weight:600;">Single Vehicle Telemetry</span>
+                  </div>
+                </div>
+                <div class="log-card-desc" style="margin-top:6px;">
+                  Select any robot to isolate its specific flight log, speed curves, battery lifecycle floor, and jam history.
+                </div>
+                <div style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                  <label for="modal-bot-select" style="font-size:11px; color:var(--text-muted); font-weight:600;">Select AMR:</label>
+                  <select id="modal-bot-select" class="log-bot-selector">
+                    <option value="AMR-01">AMR-01</option>
+                    <option value="AMR-02">AMR-02</option>
+                    <option value="AMR-03">AMR-03</option>
+                    <option value="AMR-04">AMR-04</option>
+                    <option value="AMR-05">AMR-05</option>
+                    <option value="AMR-06">AMR-06</option>
+                    <option value="AMR-07">AMR-07</option>
+                    <option value="AMR-08">AMR-08</option>
+                  </select>
+                </div>
+              </div>
+              <div class="log-card-actions" style="margin-top:6px;">
+                <button class="log-card-btn" onclick="downloadBotLog(document.getElementById('modal-bot-select').value, 'json')">
+                  <span>📄</span> Bot JSON
+                </button>
+                <button class="log-card-btn" onclick="downloadBotLog(document.getElementById('modal-bot-select').value, 'csv')">
+                  <span>📊</span> Bot Jams CSV
+                </button>
+              </div>
+            </div>
+
+            <!-- Option 5: Business KPIs & SLA Performance CSV -->
+            <div class="log-card">
+              <div>
+                <div class="log-card-header">
+                  <span class="log-card-icon">📈</span>
+                  <div>
+                    <div class="log-card-title">Throughput &amp; Business KPIs (CSV)</div>
+                    <span style="font-size:10px; color:#10b981; font-weight:600;">Amazon Robotics Industry Benchmarks</span>
+                  </div>
+                </div>
+                <div class="log-card-desc" style="margin-top:6px;">
+                  Comprehensive throughput metrics: Orders/hr, Order Cycle Times (min/avg/max), Pick Rate / Robot / Hr, Inbound Dock &amp; Outbound Bay utilization %, SLA compliance breakdown (VIP Express vs Standard), and published Amazon Robotics comparison.
+                </div>
+              </div>
+              <div class="log-card-actions">
+                <button class="log-card-btn" onclick="downloadBusinessKpisCsv()">
+                  <span>📈</span> Download Business KPIs CSV
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="modal-btn cancel" onclick="closeLogsModal()">Close</button>
+          <button class="modal-btn confirm" style="background:#0284c7;" onclick="downloadFleetJson()">📥 Export All Data</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+    <script src="/static/js/00-viewport-state.js"></script>
+  <script src="/static/js/01-tabs-terminal.js"></script>
+  <script src="/static/js/02-bot-tracking.js"></script>
+  <script src="/static/js/03-chaos-and-tracking-hud.js"></script>
+  <script src="/static/js/04-incidents.js"></script>
+  <script src="/static/js/05-bms-charger-pool.js"></script>
+  <script src="/static/js/06-terminal-claims-health.js"></script>
+  <script src="/static/js/07-inventory-slotting.js"></script>
+  <script src="/static/js/08-mesh-network.js"></script>
+  <script src="/static/js/09-fleet-state-returns.js"></script>
+  <script src="/static/js/10-humans-packstations.js"></script>
+  <script src="/static/js/11-aisles-perception.js"></script>
+  <script src="/static/js/12-telemetry-logging.js"></script>
+  <script src="/static/js/13-business-kpis.js"></script>
+  <script src="/static/js/14b-traffic-core.js"></script>
+  <script src="/static/js/14-network-tick.js"></script>
+  <script src="/static/js/15-priority-yield.js"></script>
+  <script src="/static/js/16-inner-sim-rerouting.js"></script>
+  <script src="/static/js/17-wave-planning-assignment.js"></script>
+  <script src="/static/js/18-robot-update-loop.js"></script>
+  <script src="/static/js/19-robot-drawing-inbound.js"></script>
+  <script src="/static/js/20-returns-kiva.js"></script>
+  <script src="/static/js/21-watchdog.js"></script>
+  <script src="/static/js/22-chaos-engine.js"></script>
+  <script src="/static/js/23-main-loop.js"></script>
+  <script src="/static/js/24-render-input-boot.js"></script>
+</body>
+</html>

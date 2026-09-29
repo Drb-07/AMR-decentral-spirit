@@ -1,0 +1,378 @@
+    /* Floating HUD & Controls */
+    .controls {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      background: rgba(17, 24, 39, 0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 5;
+    }
+    .ctrl-btn {
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .ctrl-btn:hover { background: #334155; border-color: var(--accent); }
+
+    .hud-card {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: rgba(17, 24, 39, 0.88);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 12px;
+      z-index: 5;
+      min-width: 250px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      transition: all 0.25s ease-in-out;
+    }
+    .hud-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .hud-title { font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px; }
+    .hud-toggle-btn {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      cursor: pointer;
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      line-height: 1;
+      font-weight: 700;
+      transition: all 0.15s;
+    }
+    .hud-toggle-btn:hover {
+      background: #334155;
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    .hud-card.collapsed {
+      min-width: auto;
+      padding: 8px 12px;
+      background: rgba(17, 24, 39, 0.75);
+    }
+    .hud-card.collapsed .hud-body {
+      display: none;
+    }
+    .hud-stat { display: flex; justify-content: space-between; margin-bottom: 5px; }
+    .hud-val { font-weight: 600; color: #fff; }
+
+    /* AMR Live Bot Tracking Inspector HUD */
+    .bot-tracking-hud {
+      position: absolute;
+      top: 20px;
+      right: 24px;
+      background: rgba(15, 23, 42, 0.94);
+      backdrop-filter: blur(14px);
+      border: 1px solid rgba(56, 189, 248, 0.5);
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-size: 12px;
+      z-index: 10;
+      width: 320px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65), 0 0 16px rgba(56, 189, 248, 0.15);
+      animation: trackHudSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: all 0.2s ease;
+    }
+    @keyframes trackHudSlideIn {
+      from { opacity: 0; transform: translateY(-12px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .tracking-hud-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      margin-bottom: 10px;
+    }
+    .tracking-hud-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tracking-radar-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #38bdf8;
+      box-shadow: 0 0 8px #38bdf8;
+      animation: radarPulse 1.2s infinite ease-in-out;
+    }
+    @keyframes radarPulse {
+      0%, 100% { transform: scale(0.85); opacity: 0.6; }
+      50% { transform: scale(1.3); opacity: 1; }
+    }
+    .tracking-title {
+      font-weight: 800;
+      color: #fff;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+    }
+    .tracking-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .tracking-hud-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .track-ctrl-icon-btn {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: #cbd5e1;
+      border-radius: 4px;
+      padding: 3px 7px;
+      font-size: 11px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+    .track-ctrl-icon-btn:hover {
+      background: #334155;
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .track-ctrl-icon-btn.active {
+      background: rgba(56, 189, 248, 0.2);
+      color: #38bdf8;
+      border-color: #38bdf8;
+    }
+    .track-ctrl-close-btn {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #f87171;
+      border-radius: 4px;
+      padding: 3px 7px;
+      font-size: 11px;
+      cursor: pointer;
+      font-weight: 700;
+      transition: all 0.15s;
+    }
+    .track-ctrl-close-btn:hover {
+      background: rgba(239, 68, 68, 0.3);
+      color: #fff;
+    }
+    .track-metrics-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .track-metric-cell {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+    .track-metric-lbl {
+      display: block;
+      font-size: 9px;
+      color: #94a3b8;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+    .track-metric-val {
+      font-size: 12px;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .track-metric-sub {
+      font-size: 10px;
+      color: #94a3b8;
+      margin-top: 1px;
+    }
+    .track-batt-bar {
+      width: 100%;
+      height: 4px;
+      background: #1e293b;
+      border-radius: 2px;
+      margin-top: 4px;
+      overflow: hidden;
+    }
+    .track-batt-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.3s ease, background 0.3s ease;
+    }
+    .track-mission-box {
+      background: rgba(30, 41, 59, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      padding: 7px 9px;
+      margin-bottom: 7px;
+    }
+    .track-mission-label {
+      font-size: 9px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+    }
+    .track-mission-desc {
+      font-size: 11px;
+      font-weight: 700;
+      color: #e2e8f0;
+      margin: 2px 0;
+    }
+    .track-mission-sub {
+      font-size: 10px;
+      color: #94a3b8;
+    }
+    .track-cargo-box {
+      background: rgba(30, 41, 59, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+      padding: 7px 9px;
+      margin-bottom: 8px;
+      max-height: 95px;
+      overflow-y: auto;
+    }
+    .track-cargo-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 3px;
+    }
+    .track-cargo-count {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .track-cargo-list {
+      font-size: 10px;
+      color: #94a3b8;
+      line-height: 1.4;
+    }
+    .track-actions-row {
+      display: flex;
+      gap: 5px;
+    }
+    .track-act-btn {
+      flex: 1;
+      padding: 5px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: 1px solid transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+    }
+    .track-act-btn.recall-btn {
+      background: rgba(245, 158, 11, 0.15);
+      color: #f59e0b;
+      border-color: rgba(245, 158, 11, 0.4);
+    }
+    .track-act-btn.recall-btn:hover {
+      background: rgba(245, 158, 11, 0.25);
+      color: #fde047;
+    }
+    .track-act-btn.inspect-btn {
+      background: #1e293b;
+      color: #cbd5e1;
+      border-color: var(--border);
+    }
+    .track-act-btn.inspect-btn:hover {
+      background: #334155;
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .track-act-btn.reset-cam-btn {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+    .track-act-btn.reset-cam-btn:hover {
+      background: rgba(56, 189, 248, 0.25);
+      color: #fff;
+    }
+
+    /* Header Bot Track Selector Dropdown */
+    .bot-track-selector-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: #151d2d;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 8px;
+    }
+    .track-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .track-select {
+      background: transparent;
+      color: #fff;
+      border: none;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      outline: none;
+      cursor: pointer;
+    }
+    .track-select option {
+      background: #0f172a;
+      color: #fff;
+    }
+
+    .legend {
+      position: absolute;
+      bottom: 24px;
+      left: 20px;
+      background: rgba(17, 24, 39, 0.88);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 11px;
+      display: flex;
+      gap: 14px;
+      z-index: 5;
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
+    .legend-box { width: 12px; height: 12px; border-radius: 3px; }
+

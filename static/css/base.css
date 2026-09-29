@@ -1,0 +1,52 @@
+
+    :root {
+      --bg: #090d16;
+      --panel: #111827;
+      --border: #1f293d;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --pickup: #06b6d4;
+      --dropoff: #f59e0b;
+      --charging: #22c55e;
+      --rack: #151821;
+      --rack-border: #282d37;
+      --aisle: #0f172a;
+      --intersection: #ef4444;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
+    body { background: var(--bg); color: var(--text); overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+
+    /* Top Bar */
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 10;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-title { font-weight: 700; font-size: 16px; letter-spacing: 0.5px; }
+    .badge {
+      font-size: 11px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      padding: 2px 8px;
+      border-radius: 9999px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .status-group { display: flex; align-items: center; gap: 18px; font-size: 13px; }
+    .status-item { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
+    .indicator { width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981; }
+
+    /* Layout */
+    .workspace { flex: 1; position: relative; overflow: hidden; display: flex; }
+    canvas { width: 100%; height: 100%; display: block; cursor: grab; background: #070a10; }
+    canvas:active { cursor: grabbing; }
+
